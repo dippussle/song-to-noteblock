@@ -299,35 +299,48 @@ function buildNbsBinary(tickNotes, songName, tps, instName) {
 }
 
 async function runAIConversion(file, opts, log, setProg) {
-  log('Decoding audio...');
+  log('Decoding audio (22.05 kHz)...');
   setProg(5);
 
   const arrBuf = await file.arrayBuffer();
   const actx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 22050 });
-  let audioBuf;
+  let decoded;
   try {
-    audioBuf = await actx.decodeAudioData(arrBuf);
+    decoded = await actx.decodeAudioData(arrBuf);
   } catch (e) {
     throw new Error('Unable to decode audio. Please ensure file is a valid MP3/WAV/OGG/M4A.');
   }
+
+  // Downmix to true Mono AudioBuffer (required by Basic Pitch AI)
+  const monoBuffer = actx.createBuffer(1, decoded.length, 22050);
+  const monoChannel = monoBuffer.getChannelData(0);
+  const numChannels = decoded.numberOfChannels;
+
+  for (let i = 0; i < decoded.length; i++) {
+    let sum = 0;
+    for (let ch = 0; ch < numChannels; ch++) {
+      sum += decoded.getChannelData(ch)[i];
+    }
+    monoChannel[i] = sum / numChannels;
+  }
   await actx.close();
 
-  const durationSec = audioBuf.duration.toFixed(1);
-  log('Loaded: ' + durationSec + 's audio.');
+  const durationSec = monoBuffer.duration.toFixed(1);
+  log('Audio loaded: ' + durationSec + 's duration (mono).');
   setProg(15);
 
   if (!basicPitchInstance) {
-    log('Loading pitch model...');
+    log('Loading AI pitch model...');
     basicPitchInstance = new BasicPitch(MODEL_URL);
   }
 
-  log('Processing audio tracks...');
+  log('Running AI Pitch Detection Model...');
   const frames = [];
   const onsets = [];
   const contours = [];
 
   await basicPitchInstance.evaluateModel(
-    audioBuf,
+    monoBuffer,
     (f, o, c) => {
       frames.push(...f);
       onsets.push(...o);
@@ -338,7 +351,7 @@ async function runAIConversion(file, opts, log, setProg) {
     }
   );
 
-  log('Extracting notes & chords...');
+  log('Transcribing AI note events & chords...');
   setProg(85);
 
   const onsetThresh = opts.noteFilter === 'clean' ? 0.55 : 0.4;
@@ -358,7 +371,7 @@ async function runAIConversion(file, opts, log, setProg) {
   );
 
   const noteEvents = noteFramesToTime(rawNoteEvents);
-  log('Extracted ' + noteEvents.length + ' clean note events.');
+  log('AI detected ' + noteEvents.length + ' clean musical note events.');
   setProg(92);
 
   const tps = 20; // 20 TPS = 1:1 real-time Minecraft speed
