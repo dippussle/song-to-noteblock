@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Song to Note Block</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -16,13 +17,28 @@ body {
 }
 .container {
   width: 100%;
-  max-width: 460px;
+  max-width: 480px;
+}
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
 }
 h1 {
   font-size: 1.3rem;
   font-weight: 600;
   color: #ffffff;
-  margin-bottom: 4px;
+}
+.badge {
+  font-size: 0.7rem;
+  background: #1f3b25;
+  color: #70d68c;
+  padding: 3px 8px;
+  border-radius: 12px;
+  border: 1px solid #2e5938;
+  font-weight: 600;
+  letter-spacing: 0.03em;
 }
 .subtitle {
   font-size: 0.85rem;
@@ -119,14 +135,14 @@ input:focus, select:focus {
 .progress-fill {
   width: 0%;
   height: 100%;
-  background: #ffffff;
+  background: #70d68c;
   transition: width 0.15s;
 }
 .status {
   font-family: monospace;
   font-size: 0.75rem;
   color: #777777;
-  max-height: 80px;
+  max-height: 90px;
   overflow-y: auto;
   margin-top: 8px;
 }
@@ -149,8 +165,11 @@ input:focus, select:focus {
 <body>
 
 <div class="container">
-  <h1>Song to Minecraft Note Block</h1>
-  <p class="subtitle">Convert audio into full chords across 25 vanilla note blocks</p>
+  <div class="header-row">
+    <h1>Song to Note Block</h1>
+    <span class="badge">Spotify AI Powered</span>
+  </div>
+  <p class="subtitle">Convert audio into clean vanilla Minecraft note block chords with AI</p>
 
   <div class="dropzone" id="dropzone">
     <p id="fileLabel">Select or drop audio file</p>
@@ -171,11 +190,10 @@ input:focus, select:focus {
       </select>
     </div>
     <div class="field">
-      <label for="sens">Sensitivity</label>
-      <select id="sens">
-        <option value="low">Low (Loud chords only)</option>
-        <option value="med" selected>Medium (Clean full chords)</option>
-        <option value="high">High (Maximum chord density)</option>
+      <label for="noteFilter">Note Density</label>
+      <select id="noteFilter">
+        <option value="clean" selected>Clean (Filter out noise)</option>
+        <option value="all">Full Detail (All detected notes)</option>
       </select>
     </div>
   </div>
@@ -191,44 +209,12 @@ input:focus, select:focus {
   <div class="stats" id="stats"></div>
 </div>
 
-<script>
-'use strict';
+<script type="module">
+import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/+esm';
 
-function fft(re, im) {
-  const n = re.length;
-  for (let i = 1, j = 0; i < n; i++) {
-    let b = n >> 1;
-    for (; j & b; b >>= 1) j ^= b;
-    j ^= b;
-    if (i < j) {
-      [re[i], re[j]] = [re[j], re[i]];
-      [im[i], im[j]] = [im[j], im[i]];
-    }
-  }
-  for (let len = 2; len <= n; len <<= 1) {
-    const ang = -2 * Math.PI / len;
-    const wr = Math.cos(ang), wi = Math.sin(ang);
-    for (let i = 0; i < n; i += len) {
-      let cr = 1, ci = 0;
-      for (let j = 0; j < len >> 1; j++) {
-        const ur = re[i+j], ui = im[i+j];
-        const vr = re[i+j+len/2]*cr - im[i+j+len/2]*ci;
-        const vi = re[i+j+len/2]*ci + im[i+j+len/2]*cr;
-        re[i+j] = ur+vr; im[i+j] = ui+vi;
-        re[i+j+len/2] = ur-vr; im[i+j+len/2] = ui-vi;
-        const nr = cr*wr - ci*wi; ci = cr*wi + ci*wr; cr = nr;
-      }
-    }
-  }
-}
-
-const FFT_N = 8192;
-const HANN = new Float32Array(FFT_N);
-for (let i = 0; i < FFT_N; i++) HANN[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (FFT_N - 1));
-
-const hzToMidi = hz => 12 * Math.log2(hz / 440) + 69;
-const midiToHz = m  => 440 * Math.pow(2, (m - 69) / 12);
-const midiName = m  => ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1);
+// Spotify Basic Pitch Model URL (loaded in browser)
+const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/model/model.json';
+let basicPitchInstance = null;
 
 const MIDI_LO = 54;  // F#3
 const MIDI_HI = 78;  // F#5
@@ -243,108 +229,6 @@ function foldMidi(midi) {
 const INST = { harp:0, bass:1, bass_drum:2, snare:3, hat:4, guitar:5,
                flute:6, bell:7, chime:8, xylophone:9, iron_xylophone:10,
                cow_bell:11, didgeridoo:12, bit:13, banjo:14, pling:15 };
-
-// Detect all concurrent fundamental chord notes while suppressing harmonic overtones
-function frameChordNotes(samples, offset, sr, threshDB) {
-  const re = new Float32Array(FFT_N);
-  const im = new Float32Array(FFT_N);
-  const end = Math.min(FFT_N, samples.length - offset);
-  for (let i = 0; i < end; i++) re[i] = samples[offset + i] * HANN[i];
-  fft(re, im);
-
-  const fRes = sr / FFT_N;
-  const minHz = 55;   // A1
-  const maxHz = 1760; // A6
-  const binLo = Math.max(1, Math.ceil(minHz / fRes));
-  const binHi = Math.floor(Math.min(maxHz / fRes, FFT_N / 2 - 1));
-
-  const mag = new Float32Array(binHi + 2);
-  for (let k = binLo; k <= binHi; k++) {
-    const a = Math.sqrt(re[k]*re[k] + im[k]*im[k]) / (FFT_N / 2);
-    mag[k] = 20 * Math.log10(a + 1e-12);
-  }
-
-  const peaks = [];
-  for (let k = binLo + 2; k < binHi - 2; k++) {
-    if (mag[k] < threshDB) continue;
-    if (mag[k] > mag[k-1] && mag[k] > mag[k-2] && mag[k] > mag[k+1] && mag[k] > mag[k+2]) {
-      const d2    = mag[k-1] - 2*mag[k] + mag[k+1];
-      const delta = d2 !== 0 ? 0.5 * (mag[k-1] - mag[k+1]) / d2 : 0;
-      const hz    = (k + delta) * fRes;
-      const midi  = Math.round(hzToMidi(hz));
-      if (midi >= 28 && midi <= 96) {
-        peaks.push({ hz, midi, db: mag[k] });
-      }
-    }
-  }
-
-  if (!peaks.length) return [];
-
-  // Sort peaks from strongest to weakest
-  peaks.sort((a, b) => b.db - a.db);
-
-  // Suppress overtones (2f, 3f, 4f, 5f) for each detected note
-  const chordNotes = [];
-  const suppressedMidis = new Set();
-
-  for (const p of peaks) {
-    if (suppressedMidis.has(p.midi)) continue;
-
-    chordNotes.push({ midi: p.midi, db: p.db });
-    if (chordNotes.length >= 25) break; // Up to all 25 note blocks at once
-
-    for (let h = 2; h <= 5; h++) {
-      const harmMidi = Math.round(hzToMidi(p.hz * h));
-      suppressedMidis.add(harmMidi);
-      suppressedMidis.add(harmMidi - 1);
-      suppressedMidis.add(harmMidi + 1);
-    }
-  }
-
-  return chordNotes;
-}
-
-function extractSongNotes(samples, sr, threshDB, progressCb) {
-  const tps = 20; // Exact 20 TPS (1:1 standard Minecraft speed)
-  const hop = Math.round(sr / tps);
-  const totalTicks = Math.floor((samples.length - FFT_N) / hop);
-
-  const tickNotes = new Map();
-  let prevActiveKeys = new Set();
-  let lastKeyTick = new Map();
-
-  for (let t = 0; t < totalTicks; t++) {
-    const offset = t * hop;
-    const notes = frameChordNotes(samples, offset, sr, threshDB);
-
-    const currentTickKeys = new Map();
-    for (const n of notes) {
-      const folded = foldMidi(n.midi);
-      const nbsKey = folded - 21; // Maps directly into 33..57 (25 vanilla notes)
-
-      const lastT = lastKeyTick.get(nbsKey) ?? -999;
-      // Retrigger check: allow note if it had a break or was newly struck
-      if (t - lastT >= 2 || !prevActiveKeys.has(nbsKey)) {
-        const vel = Math.round(Math.max(25, Math.min(100, (n.db + 48) / 45 * 100)));
-        currentTickKeys.set(nbsKey, vel);
-        lastKeyTick.set(nbsKey, t);
-      }
-    }
-
-    if (currentTickKeys.size > 0) {
-      tickNotes.set(t, currentTickKeys);
-      prevActiveKeys = new Set(currentTickKeys.keys());
-    } else {
-      prevActiveKeys.clear();
-    }
-
-    if (t % 100 === 0 && progressCb) {
-      progressCb(Math.round((t / totalTicks) * 75));
-    }
-  }
-
-  return { tickNotes, totalTicks, tps };
-}
 
 function buildNbsBinary(tickNotes, songName, tps, instName) {
   const tempo = Math.round(tps * 100); // 20 TPS -> 2000
@@ -383,7 +267,7 @@ function buildNbsBinary(tickNotes, songName, tps, instName) {
   str("Song to NoteBlock");
   str("");
   str("");
-  i16(tempo);      // 2000 = 20 TPS
+  i16(tempo);      // 2000 = 20 TPS (1:1 real-time)
   u8(0);           // auto-save off
   u8(10);          // auto-save duration
   u8(4);           // time signature 4/4
@@ -405,10 +289,10 @@ function buildNbsBinary(tickNotes, songName, tps, instName) {
       i16(layer - prevLayer);
       prevLayer = layer;
       u8(instId);
-      u8(key);             // Key 33..57 (Minecraft 25 notes)
-      u8(keyMap.get(key)); // Velocity
+      u8(key);             // Key 33..57 (Minecraft vanilla 25 notes)
+      u8(keyMap.get(key)); // Velocity (0..100)
       u8(100);             // Center panning
-      i16(0);              // Pitch
+      i16(0);              // Pitch bend
       layer++;
     }
     i16(0);
@@ -433,62 +317,105 @@ function buildNbsBinary(tickNotes, songName, tps, instName) {
   return out;
 }
 
-const SENS_THRESH = { high: -42, med: -33, low: -23 };
-
-async function processAudioFile(file, opts, log, setProg) {
-  log('Reading audio...');
+async function runAIConversion(file, opts, log, setProg) {
+  log('Decoding audio (22.05 kHz for Spotify AI)...');
   setProg(5);
 
   const arrBuf = await file.arrayBuffer();
-  const actx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
+  const actx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 22050 });
   let audioBuf;
   try {
     audioBuf = await actx.decodeAudioData(arrBuf);
   } catch (e) {
-    throw new Error('Could not decode audio. Please try a WAV or MP3 file.');
+    throw new Error('Unable to decode audio. Please ensure file is a valid MP3/WAV/OGG/M4A.');
   }
   await actx.close();
 
-  const sr = audioBuf.sampleRate;
-  const len = audioBuf.length;
-  const mono = new Float32Array(len);
-  for (let ch = 0; ch < audioBuf.numberOfChannels; ch++) {
-    const d = audioBuf.getChannelData(ch);
-    for (let i = 0; i < len; i++) mono[i] += d[i] / audioBuf.numberOfChannels;
-  }
-  const durationSec = (len / sr).toFixed(1);
-  log('Loaded ' + durationSec + 's of audio.');
+  const durationSec = audioBuf.duration.toFixed(1);
+  log('Audio loaded: ' + durationSec + 's duration.');
   setProg(15);
 
-  const thresh = SENS_THRESH[opts.sens] ?? -33;
-
-  log('Extracting chords & notes across 25 note blocks...');
-  const { tickNotes, tps } = extractSongNotes(mono, sr, thresh, p => {
-    setProg(15 + p);
-  });
-  setProg(90);
-
-  let totalNotesCount = 0;
-  let maxChordSize = 0;
-  const uniqueKeys = new Set();
-  for (const [t, kmap] of tickNotes) {
-    totalNotesCount += kmap.size;
-    if (kmap.size > maxChordSize) maxChordSize = kmap.size;
-    for (const k of kmap.keys()) uniqueKeys.add(k);
+  if (!basicPitchInstance) {
+    log('Initializing Spotify Basic Pitch Neural Network...');
+    basicPitchInstance = new BasicPitch(MODEL_URL);
   }
 
-  log('Extracted ' + totalNotesCount + ' notes. Max simultaneous notes: ' + maxChordSize + '.');
+  log('Running AI Pitch Detection Model...');
+  const frames = [];
+  const onsets = [];
+  const contours = [];
 
+  await basicPitchInstance.evaluateModel(
+    audioBuf,
+    (f, o, c) => {
+      frames.push(...f);
+      onsets.push(...o);
+      contours.push(...c);
+    },
+    (percent) => {
+      setProg(15 + Math.round(percent * 65));
+    }
+  );
+
+  log('Transcribing AI note events & chords...');
+  setProg(85);
+
+  const onsetThresh = opts.noteFilter === 'clean' ? 0.55 : 0.4;
+  const frameThresh = opts.noteFilter === 'clean' ? 0.35 : 0.25;
+  const minNoteLen  = opts.noteFilter === 'clean' ? 6 : 4;
+
+  const rawNoteEvents = outputToNotesPoly(
+    frames,
+    onsets,
+    onsetThresh,
+    frameThresh,
+    minNoteLen,
+    true,   // inferOnsets
+    null,   // maxFreq
+    null,   // minFreq
+    true    // melodiaTrick
+  );
+
+  const noteEvents = noteFramesToTime(rawNoteEvents);
+  log('AI detected ' + noteEvents.length + ' clean musical note events.');
+  setProg(92);
+
+  const tps = 20; // 20 TPS = 1:1 real-time Minecraft speed
+  const tickNotes = new Map();
+  const uniqueKeys = new Set();
+  let maxSimultaneous = 0;
+
+  for (const n of noteEvents) {
+    const folded = foldMidi(n.pitchMidi);
+    const nbsKey = folded - 21; // 33..57
+    const tick = Math.max(0, Math.round(n.startTimeSeconds * tps));
+    const vel = Math.round(Math.max(25, Math.min(100, n.amplitude * 100)));
+
+    if (!tickNotes.has(tick)) {
+      tickNotes.set(tick, new Map());
+    }
+    const currentTickMap = tickNotes.get(tick);
+    if (!currentTickMap.has(nbsKey) || currentTickMap.get(nbsKey) < vel) {
+      currentTickMap.set(nbsKey, vel);
+    }
+    uniqueKeys.add(nbsKey);
+  }
+
+  for (const [t, kmap] of tickNotes) {
+    if (kmap.size > maxSimultaneous) maxSimultaneous = kmap.size;
+  }
+
+  log('Building .NBS binary at 20 TPS...');
   const songName = (file.name.replace(/\.[^.]+$/, '')).slice(0, 64);
   const bytes = buildNbsBinary(tickNotes, songName, tps, opts.inst);
   setProg(100);
-  log('Ready to download.');
+  log('Conversion complete!');
 
   return {
     bytes,
     stats: {
-      notes: totalNotesCount,
-      chordMax: maxChordSize,
+      notes: noteEvents.length,
+      chordMax: maxSimultaneous,
       tps,
       dur: durationSec,
       keys: uniqueKeys.size,
@@ -540,20 +467,20 @@ convertBtn.addEventListener('click', async () => {
 
   const opts = {
     inst: document.getElementById('inst').value,
-    sens: document.getElementById('sens').value,
+    noteFilter: document.getElementById('noteFilter').value,
   };
 
   try {
-    const result = await processAudioFile(curFile, opts, addLog, p => { progressFill.style.width = p + '%'; });
+    const result = await runAIConversion(curFile, opts, addLog, p => { progressFill.style.width = p + '%'; });
     const s = result.stats;
     dlBlob = new Blob([result.bytes], { type: 'application/octet-stream' });
     dlName = s.songName.replace(/[^\w\- ]/g, '_').trim() + '.nbs';
     downloadBtn.style.display = 'block';
     statsEl.innerHTML =
-      '<strong>' + s.notes + '</strong> notes total &middot; ' +
-      'Up to <strong>' + s.chordMax + ' notes</strong> simultaneous chord<br>' +
+      '<strong>' + s.notes + '</strong> AI detected notes &middot; ' +
+      'Up to <strong>' + s.chordMax + ' notes</strong> simultaneous chords<br>' +
       '<strong>' + s.dur + 's</strong> duration &middot; ' +
-      '<strong>' + s.keys + '/25</strong> vanilla Minecraft notes used';
+      '<strong>' + s.keys + '/25</strong> vanilla Minecraft keys used';
     statsEl.style.display = 'block';
   } catch (e) {
     addLog('Error: ' + e.message);
