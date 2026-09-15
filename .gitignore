@@ -1,0 +1,4 @@
+﻿# Song to Minecraft Note Blocks - .gitignore
+*.tmp
+.DS_Store
+Thumbs.db
