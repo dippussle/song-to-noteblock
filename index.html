@@ -18,7 +18,7 @@ body {
 }
 .container {
   width: 100%;
-  max-width: 480px;
+  max-width: 460px;
 }
 h1 {
   font-size: 1.3rem;
@@ -161,7 +161,7 @@ input:focus, select:focus {
 
 <div class="container">
   <h1>Song to Note Block</h1>
-  <p class="subtitle">Convert audio into full 25-note vanilla Minecraft music</p>
+  <p class="subtitle">Convert audio into 25-note vanilla Harp note blocks</p>
 
   <div class="dropzone" id="dropzone">
     <p id="fileLabel">Select or drop audio/video file</p>
@@ -171,36 +171,20 @@ input:focus, select:focus {
 
   <div class="grid">
     <div class="field">
-      <label for="instMode">Instrument Preset</label>
-      <select id="instMode">
-        <option value="orchestra" selected>Full Band (Bass + Pling/Guitar + Piano)</option>
-        <option value="pling">Pling Guitar (Punchy Lead)</option>
-        <option value="harp">Harp (Classic Piano)</option>
-        <option value="flute">Flute (Smooth Lead)</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="speedMode">Timing & Speed (TPS)</label>
-      <select id="speedMode">
-        <option value="20" selected>20 TPS (Original Real-Time 1:1 Speed)</option>
-        <option value="10">10 TPS (Redstone Repeater Standard Speed)</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="sensitivity">Melody Sensitivity</label>
+      <label for="sensitivity">Sensitivity</label>
       <select id="sensitivity">
-        <option value="high" selected>High (Capture full riffs & solos)</option>
+        <option value="high" selected>High (Capture fast solos & riffs)</option>
         <option value="med">Medium (Balanced)</option>
         <option value="low">Low (Only loudest notes)</option>
       </select>
     </div>
     <div class="field">
-      <label for="maxChords">Max Chords per Beat</label>
-      <select id="maxChords">
-        <option value="4" selected>Up to 4 notes (Melody + Harmony + Bass)</option>
-        <option value="2">2 notes (Lead + Bass only)</option>
-        <option value="1">1 note (Solo Melody only)</option>
-        <option value="25">Unlimited (All detected notes)</option>
+      <label for="polyphony">Max Notes at Once</label>
+      <select id="polyphony">
+        <option value="4" selected>Up to 4 Harp notes (Full Chords)</option>
+        <option value="2">2 Harp notes (Lead + Bass)</option>
+        <option value="1">1 Harp note (Lead Melody Only)</option>
+        <option value="25">Unlimited (All 25 notes)</option>
       </select>
     </div>
   </div>
@@ -216,7 +200,7 @@ input:focus, select:focus {
   <div class="stats" id="stats"></div>
 </div>
 
-<div class="version-tag">v2.1.0</div>
+<div class="version-tag">v2.2.0</div>
 
 <script type="module">
 import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/+esm';
@@ -224,16 +208,12 @@ import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsd
 const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/model/model.json';
 let basicPitchInstance = null;
 
-// Vanilla Minecraft instrument constants
-const NBS_HARP  = 0;  // Dirt (Piano)
-const NBS_BASS  = 1;  // Wood (Bass Guitar)
-const NBS_FLUTE = 6;  // Clay (Flute)
-const NBS_BELL  = 7;  // Gold (Bell)
-const NBS_GUITAR = 5; // Wool (Guitar)
-const NBS_PLING = 15; // Glowstone (Pling Guitar - best for anime/rock solos)
+// ONLY HARP (0) for 100% vanilla note block on dirt/grass
+const NBS_HARP = 0;
 
-const MIDI_LO = 54; // F#3
-const MIDI_HI = 78; // F#5
+// Vanilla 25-note range: F#3 to F#5 (MIDI 54 to 78) -> NBS keys 33 to 57
+const MIDI_LO = 54;
+const MIDI_HI = 78;
 
 function foldToVanillaRange(midi) {
   let m = midi;
@@ -242,30 +222,13 @@ function foldToVanillaRange(midi) {
   return Math.max(MIDI_LO, Math.min(MIDI_HI, m));
 }
 
-function assignInstrument(originalMidi, mode) {
-  if (mode === 'pling') return NBS_PLING;
-  if (mode === 'harp') return NBS_HARP;
-  if (mode === 'flute') return NBS_FLUTE;
-
-  // 'orchestra' preset:
-  if (originalMidi < 48) {
-    return NBS_BASS;  // Bass line
-  } else if (originalMidi <= 66) {
-    return NBS_PLING; // Punchy main lead / guitar
-  } else if (originalMidi <= 78) {
-    return NBS_HARP;  // Mid-high piano/synth
-  } else {
-    return NBS_BELL;  // High accents
-  }
-}
-
 function buildNbsBinary(tickNotes, songName, tps) {
   const tempo = Math.round(tps * 100);
 
   const sortedTicks = [...tickNotes.keys()].sort((a, b) => a - b);
   if (!sortedTicks.length) {
     sortedTicks.push(0);
-    tickNotes.set(0, [{ inst: 0, key: 33, vel: 100 }]);
+    tickNotes.set(0, [{ inst: NBS_HARP, key: 33, vel: 100 }]);
   }
 
   const songLen = sortedTicks[sortedTicks.length - 1];
@@ -295,7 +258,7 @@ function buildNbsBinary(tickNotes, songName, tps) {
   str("Song to NoteBlock");
   str("");
   str("");
-  i16(tempo);      // TPS * 100 (e.g. 2000 for 20 TPS, 1000 for 10 TPS)
+  i16(tempo);      // 2000 = 20 TPS (1:1 original song speed)
   u8(0);           // auto-save off
   u8(10);          // auto-save duration
   u8(4);           // time signature 4/4
@@ -303,7 +266,7 @@ function buildNbsBinary(tickNotes, songName, tps) {
   str("");
   u8(0); u8(0); i16(0);
 
-  // Notes section
+  // Notes section - ALL NOTES ARE HARP (inst: 0)
   let prevTick = -1;
   for (const tick of sortedTicks) {
     i16(tick - prevTick);
@@ -315,11 +278,11 @@ function buildNbsBinary(tickNotes, songName, tps) {
     for (const n of noteList) {
       i16(layer - prevLayer);
       prevLayer = layer;
-      u8(n.inst);        // Instrument ID
-      u8(n.key);         // Key (33..57 vanilla 25 notes)
-      u8(n.vel);         // Velocity (0..100)
-      u8(100);           // Center panning
-      i16(0);            // Pitch bend
+      u8(NBS_HARP);     // 100% Harp only
+      u8(n.key);        // Key (33..57 vanilla 25 notes)
+      u8(n.vel);        // Velocity (0..100)
+      u8(100);          // Center panning
+      i16(0);           // Pitch bend
       layer++;
     }
     i16(0);
@@ -344,11 +307,10 @@ function buildNbsBinary(tickNotes, songName, tps) {
   return out;
 }
 
-// Full Musical Transcription Pipeline
-function transcribeToMinecraft(rawNoteEvents, instMode, maxChordsLimit, tps) {
+function transcribeHarpOnly(rawNoteEvents, polyphonyLimit, tps) {
   const sorted = [...rawNoteEvents].sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
 
-  const tickMap = new Map(); // tick -> array of notes
+  const tickMap = new Map();
 
   for (const n of sorted) {
     const tick = Math.max(0, Math.round(n.startTimeSeconds * tps));
@@ -356,44 +318,32 @@ function transcribeToMinecraft(rawNoteEvents, instMode, maxChordsLimit, tps) {
     const foldedMidi = foldToVanillaRange(origMidi);
     const nbsKey = foldedMidi - 21; // 33..57
 
-    const inst = assignInstrument(origMidi, instMode);
     const vel = Math.round(Math.max(35, Math.min(100, n.amplitude * 115)));
 
     if (!tickMap.has(tick)) tickMap.set(tick, []);
     tickMap.get(tick).push({
-      inst,
       key: nbsKey,
       vel,
-      origMidi,
       amp: n.amplitude,
-      dur: n.durationSeconds
+      origMidi
     });
   }
 
-  // Select the cleanest, most prominent notes for each tick
   const cleanedTicks = new Map();
 
   for (const [tick, notes] of tickMap) {
-    // Sort by amplitude descending (loudest main notes first)
+    // Sort by amplitude descending (loudest main melody notes first)
     notes.sort((a, b) => b.amp - a.amp);
 
     const chosen = [];
     const usedKeys = new Set();
-    const instCounts = new Map();
 
     for (const n of notes) {
-      if (chosen.length >= maxChordsLimit) break;
-
-      const instCnt = instCounts.get(n.inst) || 0;
-      if (n.inst === NBS_BASS && instCnt >= 1) continue; // Max 1 bass root note
-      if (instCnt >= 3) continue; // Max 3 per instrument
-
-      const keyId = `${n.inst}_${n.key}`;
-      if (usedKeys.has(keyId)) continue; // No duplicate on same tick
+      if (chosen.length >= polyphonyLimit) break;
+      if (usedKeys.has(n.key)) continue; // Don't hit same harp block twice at same tick
 
       chosen.push(n);
-      usedKeys.add(keyId);
-      instCounts.set(n.inst, instCnt + 1);
+      usedKeys.add(n.key);
     }
 
     if (chosen.length > 0) {
@@ -414,10 +364,10 @@ async function runConversion(file, opts, log, setProg) {
   try {
     decoded = await actx.decodeAudioData(arrBuf);
   } catch (e) {
-    throw new Error('Unable to decode audio. Please ensure file is a valid MP3, WAV, MP4, or OGG.');
+    throw new Error('Could not decode audio. Please ensure file is a valid MP3, WAV, MP4, or OGG.');
   }
 
-  // Downmix to true Mono AudioBuffer
+  // Downmix to mono AudioBuffer
   const monoBuffer = actx.createBuffer(1, decoded.length, 22050);
   const monoChannel = monoBuffer.getChannelData(0);
   const numChannels = decoded.numberOfChannels;
@@ -436,11 +386,11 @@ async function runConversion(file, opts, log, setProg) {
   setProg(15);
 
   if (!basicPitchInstance) {
-    log('Loading Spotify AI Pitch Model...');
+    log('Loading Spotify AI Model...');
     basicPitchInstance = new BasicPitch(MODEL_URL);
   }
 
-  log('Running AI Transcription...');
+  log('Transcribing music with AI Neural Network...');
   const frames = [];
   const onsets = [];
   const contours = [];
@@ -457,10 +407,9 @@ async function runConversion(file, opts, log, setProg) {
     }
   );
 
-  log('Extracting musical notes...');
+  log('Extracting Harp note block events...');
   setProg(85);
 
-  // Dynamic sensitivity thresholds based on user setting
   let onsetThresh = 0.35;
   let frameThresh = 0.20;
   let minNoteLen  = 3;
@@ -484,33 +433,38 @@ async function runConversion(file, opts, log, setProg) {
     true,
     null,
     null,
-    true // Melodia trick for extracting the main lead melody
+    true
   );
 
   const noteEvents = noteFramesToTime(rawNoteEvents);
   log('Transcribed ' + noteEvents.length + ' melodic note events.');
   setProg(92);
 
-  const tps = parseInt(opts.speedMode) || 20;
-  const maxChordsLimit = parseInt(opts.maxChords) || 4;
+  const tps = 20; // 20 TPS = 1:1 real-time original speed
+  const polyphonyLimit = parseInt(opts.polyphony) || 4;
 
-  const orchestratedTicks = transcribeToMinecraft(noteEvents, opts.instMode, maxChordsLimit, tps);
+  const harpTicks = transcribeHarpOnly(noteEvents, polyphonyLimit, tps);
 
-  let totalNotes = 0;
-  for (const [t, list] of orchestratedTicks) totalNotes += list.length;
+  let totalHarpNotes = 0;
+  const uniqueKeys = new Set();
+  for (const [t, list] of harpTicks) {
+    totalHarpNotes += list.length;
+    for (const n of list) uniqueKeys.add(n.key);
+  }
 
-  log('Mapped ' + totalNotes + ' notes onto vanilla Minecraft note blocks at ' + tps + ' TPS.');
+  log('Mapped ' + totalHarpNotes + ' notes onto ' + uniqueKeys.size + '/25 Harp note blocks.');
   setProg(96);
 
   const songName = (file.name.replace(/\.[^.]+$/, '')).slice(0, 64);
-  const bytes = buildNbsBinary(orchestratedTicks, songName, tps);
+  const bytes = buildNbsBinary(harpTicks, songName, tps);
   setProg(100);
   log('Conversion complete!');
 
   return {
     bytes,
     stats: {
-      notes: totalNotes,
+      notes: totalHarpNotes,
+      keys: uniqueKeys.size,
       tps,
       dur: durationSec,
       songName
@@ -560,10 +514,8 @@ convertBtn.addEventListener('click', async () => {
   logEl.innerHTML = '';
 
   const opts = {
-    instMode:    document.getElementById('instMode').value,
-    speedMode:   document.getElementById('speedMode').value,
     sensitivity: document.getElementById('sensitivity').value,
-    maxChords:   document.getElementById('maxChords').value,
+    polyphony:   document.getElementById('polyphony').value,
   };
 
   try {
@@ -573,9 +525,9 @@ convertBtn.addEventListener('click', async () => {
     dlName = s.songName.replace(/[^\w\- ]/g, '_').trim() + '.nbs';
     downloadBtn.style.display = 'block';
     statsEl.innerHTML =
-      '<strong>' + s.notes + '</strong> notes total &middot; ' +
-      '<strong>' + s.dur + 's</strong> audio duration<br>' +
-      'Playback Grid: <strong>' + s.tps + ' TPS</strong> (Note Block Studio speed)';
+      '<strong>' + s.notes + '</strong> Harp notes total &middot; ' +
+      '<strong>' + s.keys + '/25</strong> vanilla notes used<br>' +
+      '<strong>' + s.dur + 's</strong> duration &middot; 100% Harp Instrument (Dirt)';
     statsEl.style.display = 'block';
   } catch (e) {
     addLog('Error: ' + e.message);
