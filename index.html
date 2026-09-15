@@ -17,28 +17,13 @@ body {
 }
 .container {
   width: 100%;
-  max-width: 480px;
-}
-.header-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 4px;
+  max-width: 460px;
 }
 h1 {
   font-size: 1.3rem;
   font-weight: 600;
   color: #ffffff;
-}
-.badge {
-  font-size: 0.7rem;
-  background: #1f3b25;
-  color: #70d68c;
-  padding: 3px 8px;
-  border-radius: 12px;
-  border: 1px solid #2e5938;
-  font-weight: 600;
-  letter-spacing: 0.03em;
+  margin-bottom: 4px;
 }
 .subtitle {
   font-size: 0.85rem;
@@ -135,7 +120,7 @@ input:focus, select:focus {
 .progress-fill {
   width: 0%;
   height: 100%;
-  background: #70d68c;
+  background: #ffffff;
   transition: width 0.15s;
 }
 .status {
@@ -165,11 +150,8 @@ input:focus, select:focus {
 <body>
 
 <div class="container">
-  <div class="header-row">
-    <h1>Song to Note Block</h1>
-    <span class="badge">Spotify AI Powered</span>
-  </div>
-  <p class="subtitle">Convert audio into clean vanilla Minecraft note block chords with AI</p>
+  <h1>Song to Note Block</h1>
+  <p class="subtitle">Convert audio into vanilla Minecraft note block chords</p>
 
   <div class="dropzone" id="dropzone">
     <p id="fileLabel">Select or drop audio file</p>
@@ -192,8 +174,8 @@ input:focus, select:focus {
     <div class="field">
       <label for="noteFilter">Note Density</label>
       <select id="noteFilter">
-        <option value="clean" selected>Clean (Filter out noise)</option>
-        <option value="all">Full Detail (All detected notes)</option>
+        <option value="clean" selected>Clean (Recommended)</option>
+        <option value="all">Full Detail (All notes)</option>
       </select>
     </div>
   </div>
@@ -212,7 +194,6 @@ input:focus, select:focus {
 <script type="module">
 import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/+esm';
 
-// Spotify Basic Pitch Model URL (loaded in browser)
 const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/model/model.json';
 let basicPitchInstance = null;
 
@@ -318,7 +299,7 @@ function buildNbsBinary(tickNotes, songName, tps, instName) {
 }
 
 async function runAIConversion(file, opts, log, setProg) {
-  log('Decoding audio (22.05 kHz for Spotify AI)...');
+  log('Decoding audio...');
   setProg(5);
 
   const arrBuf = await file.arrayBuffer();
@@ -332,15 +313,15 @@ async function runAIConversion(file, opts, log, setProg) {
   await actx.close();
 
   const durationSec = audioBuf.duration.toFixed(1);
-  log('Audio loaded: ' + durationSec + 's duration.');
+  log('Loaded: ' + durationSec + 's audio.');
   setProg(15);
 
   if (!basicPitchInstance) {
-    log('Initializing Spotify Basic Pitch Neural Network...');
+    log('Loading pitch model...');
     basicPitchInstance = new BasicPitch(MODEL_URL);
   }
 
-  log('Running AI Pitch Detection Model...');
+  log('Processing audio tracks...');
   const frames = [];
   const onsets = [];
   const contours = [];
@@ -357,7 +338,7 @@ async function runAIConversion(file, opts, log, setProg) {
     }
   );
 
-  log('Transcribing AI note events & chords...');
+  log('Extracting notes & chords...');
   setProg(85);
 
   const onsetThresh = opts.noteFilter === 'clean' ? 0.55 : 0.4;
@@ -370,14 +351,14 @@ async function runAIConversion(file, opts, log, setProg) {
     onsetThresh,
     frameThresh,
     minNoteLen,
-    true,   // inferOnsets
-    null,   // maxFreq
-    null,   // minFreq
-    true    // melodiaTrick
+    true,
+    null,
+    null,
+    true
   );
 
   const noteEvents = noteFramesToTime(rawNoteEvents);
-  log('AI detected ' + noteEvents.length + ' clean musical note events.');
+  log('Extracted ' + noteEvents.length + ' clean note events.');
   setProg(92);
 
   const tps = 20; // 20 TPS = 1:1 real-time Minecraft speed
@@ -409,7 +390,7 @@ async function runAIConversion(file, opts, log, setProg) {
   const songName = (file.name.replace(/\.[^.]+$/, '')).slice(0, 64);
   const bytes = buildNbsBinary(tickNotes, songName, tps, opts.inst);
   setProg(100);
-  log('Conversion complete!');
+  log('Conversion complete.');
 
   return {
     bytes,
@@ -477,7 +458,7 @@ convertBtn.addEventListener('click', async () => {
     dlName = s.songName.replace(/[^\w\- ]/g, '_').trim() + '.nbs';
     downloadBtn.style.display = 'block';
     statsEl.innerHTML =
-      '<strong>' + s.notes + '</strong> AI detected notes &middot; ' +
+      '<strong>' + s.notes + '</strong> notes &middot; ' +
       'Up to <strong>' + s.chordMax + ' notes</strong> simultaneous chords<br>' +
       '<strong>' + s.dur + 's</strong> duration &middot; ' +
       '<strong>' + s.keys + '/25</strong> vanilla Minecraft keys used';
