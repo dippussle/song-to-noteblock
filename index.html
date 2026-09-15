@@ -16,7 +16,7 @@ body {
 }
 .container {
   width: 100%;
-  max-width: 460px;
+  max-width: 480px;
 }
 h1 {
   font-size: 1.3rem;
@@ -150,7 +150,7 @@ input:focus, select:focus {
 
 <div class="container">
   <h1>Song to Minecraft Note Block</h1>
-  <p class="subtitle">Convert audio into a 25-note vanilla compatible .nbs file</p>
+  <p class="subtitle">Convert audio into a clean 25-note vanilla Minecraft .nbs file</p>
 
   <div class="dropzone" id="dropzone">
     <p id="fileLabel">Select or drop audio file</p>
@@ -160,15 +160,19 @@ input:focus, select:focus {
 
   <div class="grid">
     <div class="field">
-      <label for="bpm">BPM (0 = Auto)</label>
-      <input type="number" id="bpm" value="0" min="0" max="400">
+      <label for="mode">Mode / Polyphony</label>
+      <select id="mode">
+        <option value="melody_bass" selected>Melody + Bass (Cleanest)</option>
+        <option value="melody_only">Melody Only (Single note)</option>
+        <option value="chords">Full Chords (3 notes max)</option>
+        <option value="all">All Notes (Uncapped)</option>
+      </select>
     </div>
     <div class="field">
-      <label for="sens">Sensitivity</label>
-      <select id="sens">
-        <option value="high">High (more notes)</option>
-        <option value="med" selected>Medium</option>
-        <option value="low">Low (cleaner)</option>
+      <label for="tpsSelect">Playback Speed (TPS)</label>
+      <select id="tpsSelect">
+        <option value="20" selected>20 TPS (Standard Minecraft 1:1 Speed)</option>
+        <option value="10">10 TPS (Redstone Repeater Speed)</option>
       </select>
     </div>
     <div class="field">
@@ -183,8 +187,12 @@ input:focus, select:focus {
       </select>
     </div>
     <div class="field">
-      <label for="songName">Song Name</label>
-      <input type="text" id="songName" placeholder="Auto">
+      <label for="sens">Sensitivity</label>
+      <select id="sens">
+        <option value="low">Low (Only clear loud notes)</option>
+        <option value="med" selected>Medium (Balanced)</option>
+        <option value="high">High (Includes quiet notes)</option>
+      </select>
     </div>
   </div>
 
@@ -252,16 +260,19 @@ const INST = { harp:0, bass:1, bass_drum:2, snare:3, hat:4, guitar:5,
                flute:6, bell:7, chime:8, xylophone:9, iron_xylophone:10,
                cow_bell:11, didgeridoo:12, bit:13, banjo:14, pling:15 };
 
-function framePeaks(samples, offset, sr, maxPeaks, threshDB) {
+// Extract clean fundamental frequencies by harmonic cancellation
+function frameFundamentals(samples, offset, sr, maxNotes, threshDB) {
   const re = new Float32Array(FFT_N);
   const im = new Float32Array(FFT_N);
   const end = Math.min(FFT_N, samples.length - offset);
   for (let i = 0; i < end; i++) re[i] = samples[offset + i] * HANN[i];
   fft(re, im);
 
-  const fRes  = sr / FFT_N;
-  const binLo = Math.max(1, Math.ceil(midiToHz(MIDI_LO - 24) / fRes));
-  const binHi = Math.floor(Math.min(midiToHz(MIDI_HI + 24) / fRes, FFT_N / 2 - 1));
+  const fRes = sr / FFT_N;
+  const minHz = 55;   // A1
+  const maxHz = 1760; // A6
+  const binLo = Math.max(1, Math.ceil(minHz / fRes));
+  const binHi = Math.floor(Math.min(maxHz / fRes, FFT_N / 2 - 1));
 
   const mag = new Float32Array(binHi + 2);
   for (let k = binLo; k <= binHi; k++) {
@@ -269,6 +280,7 @@ function framePeaks(samples, offset, sr, maxPeaks, threshDB) {
     mag[k] = 20 * Math.log10(a + 1e-12);
   }
 
+  // Find candidate spectral peaks
   const peaks = [];
   for (let k = binLo + 2; k < binHi - 2; k++) {
     if (mag[k] < threshDB) continue;
@@ -277,95 +289,105 @@ function framePeaks(samples, offset, sr, maxPeaks, threshDB) {
       const delta = d2 !== 0 ? 0.5 * (mag[k-1] - mag[k+1]) / d2 : 0;
       const hz    = (k + delta) * fRes;
       const midi  = Math.round(hzToMidi(hz));
-      if (midi >= 21 && midi <= 108) peaks.push({ midi, db: mag[k] });
-    }
-  }
-
-  const best = {};
-  for (const p of peaks) {
-    if (!best[p.midi] || best[p.midi].db < p.db) best[p.midi] = p;
-  }
-  return Object.values(best).sort((a, b) => b.db - a.db).slice(0, maxPeaks);
-}
-
-function trackNotes(allPeaks, hop, sr, minDurSec) {
-  const hopSec    = hop / sr;
-  const minFrames = Math.max(1, Math.ceil(minDurSec / hopSec));
-  const gapFrames = Math.max(1, Math.ceil(0.04 / hopSec));
-
-  const active = new Map();
-  const events = [];
-
-  for (let f = 0; f < allPeaks.length; f++) {
-    const present = new Set(allPeaks[f].map(p => p.midi));
-    const dbOf    = {};
-    for (const p of allPeaks[f]) dbOf[p.midi] = p.db;
-
-    for (const [midi, info] of active) {
-      if (present.has(midi)) {
-        info.last = f;
-        info.dbs.push(dbOf[midi]);
-      } else if (f - info.last > gapFrames) {
-        if (info.last - info.start + 1 >= minFrames) {
-          const avgDb = info.dbs.reduce((a, b) => a + b, 0) / info.dbs.length;
-          events.push({ startSec: info.start * hopSec, endSec: (info.last + 1) * hopSec, midi, db: avgDb });
-        }
-        active.delete(midi);
+      if (midi >= 28 && midi <= 96) {
+        peaks.push({ k, hz, midi, db: mag[k] });
       }
     }
-    for (const midi of present) {
-      if (!active.has(midi)) active.set(midi, { start: f, last: f, dbs: [dbOf[midi]] });
+  }
+
+  if (!peaks.length) return [];
+
+  // Sort peaks by amplitude descending
+  peaks.sort((a, b) => b.db - a.db);
+
+  // Harmonic overtone suppression:
+  // If peak A has fundamental frequency f, suppress peaks at 2f, 3f, 4f
+  const fundamentals = [];
+  const suppressedBins = new Set();
+
+  for (const p of peaks) {
+    if (suppressedBins.has(p.midi)) continue;
+
+    fundamentals.push({ midi: p.midi, db: p.db });
+    if (fundamentals.length >= maxNotes) break;
+
+    // Suppress integer harmonics of this fundamental note
+    for (let h = 2; h <= 5; h++) {
+      const harmMidi = Math.round(hzToMidi(p.hz * h));
+      suppressedBins.add(harmMidi);
+      suppressedBins.add(harmMidi - 1);
+      suppressedBins.add(harmMidi + 1);
     }
   }
-  for (const [midi, info] of active) {
-    if (info.last - info.start + 1 >= minFrames) {
-      const avgDb = info.dbs.reduce((a, b) => a + b, 0) / info.dbs.length;
-      events.push({ startSec: info.start * hopSec, endSec: (info.last + 1) * hopSec, midi, db: avgDb });
+
+  return fundamentals;
+}
+
+// Convert frame fundamentals to clean musical note events
+function extractCleanNotes(samples, sr, mode, threshDB, tps, progressCb) {
+  const hop = Math.round(sr / tps); // Exact samples per tick!
+  const totalTicks = Math.floor((samples.length - FFT_N) / hop);
+
+  let maxNotesPerTick = 2;
+  if (mode === 'melody_only') maxNotesPerTick = 1;
+  else if (mode === 'melody_bass') maxNotesPerTick = 2;
+  else if (mode === 'chords') maxNotesPerTick = 3;
+  else if (mode === 'all') maxNotesPerTick = 25;
+
+  const tickNotes = new Map();
+  let prevActiveMidis = new Set();
+  let lastNoteTime = new Map(); // midi -> tick
+
+  for (let t = 0; t < totalTicks; t++) {
+    const offset = t * hop;
+    const notes = frameFundamentals(samples, offset, sr, maxNotesPerTick, threshDB);
+
+    const currentTickMidis = new Map();
+    for (const n of notes) {
+      const folded = foldMidi(n.midi);
+      const nbsKey = folded - 21; // 33..57
+
+      // Debounce: prevent machine-gun retriggering of exact same key on consecutive ticks
+      // unless there is a gap of at least 2 ticks
+      const lastTick = lastNoteTime.get(nbsKey) ?? -999;
+      if (t - lastTick >= 2 || !prevActiveMidis.has(nbsKey)) {
+        const vel = Math.round(Math.max(20, Math.min(100, (n.db + 50) / 45 * 100)));
+        currentTickMidis.set(nbsKey, vel);
+        lastNoteTime.set(nbsKey, t);
+      }
+    }
+
+    if (currentTickMidis.size > 0) {
+      tickNotes.set(t, currentTickMidis);
+      prevActiveMidis = new Set(currentTickMidis.keys());
+    } else {
+      prevActiveMidis.clear();
+    }
+
+    if (t % 100 === 0 && progressCb) {
+      progressCb(Math.round((t / totalTicks) * 70));
     }
   }
-  return events.sort((a, b) => a.startSec - b.startSec);
+
+  return { tickNotes, totalTicks };
 }
 
-function detectBpm(events) {
-  if (events.length < 4) return 120;
-  const onsets = [...new Set(events.map(e => Math.round(e.startSec * 1000)))].sort((a, b) => a - b);
-  const iois = [];
-  for (let i = 1; i < onsets.length; i++) {
-    const d = (onsets[i] - onsets[i-1]) / 1000;
-    if (d > 0.08 && d < 2.0) iois.push(d);
-  }
-  if (!iois.length) return 120;
-  iois.sort((a, b) => a - b);
-  const med  = iois[Math.floor(iois.length / 2)];
-  const bpm  = 60 / med;
-  const snaps = [60,70,75,80,85,90,95,100,105,110,115,120,125,128,130,140,150,160,170,180,200];
-  const near  = snaps.reduce((a, b) => Math.abs(b - bpm) < Math.abs(a - bpm) ? b : a);
-  return Math.abs(near - bpm) < 12 ? near : Math.round(bpm);
-}
-
-function buildNbs(events, songName, bpm, instName) {
-  const tps    = (bpm / 60) * 4;               // 16th note grid
-  const tempo  = Math.round(tps * 100);        // NBS tempo: hundredths of ticks per second
+function buildNbsBinary(tickNotes, totalTicks, songName, tps, instName) {
+  const tempo = Math.round(tps * 100); // NBS tempo = TPS * 100 (e.g. 20 TPS -> 2000)
   const instId = INST[instName] ?? 0;
 
-  const tickMap = {};
-  for (const ev of events) {
-    const folded = foldMidi(ev.midi);
-    const nbsKey = folded - 21;                // 33..57 (Minecraft vanilla 25 notes)
-    const tick   = Math.max(0, Math.round(ev.startSec * tps));
-    const vel    = Math.round(Math.max(5, Math.min(100, (ev.db + 60) / 60 * 100)));
-    if (!tickMap[tick]) tickMap[tick] = new Map();
-    if (!tickMap[tick].has(nbsKey)) tickMap[tick].set(nbsKey, vel);
+  const sortedTicks = [...tickNotes.keys()].sort((a, b) => a - b);
+  if (!sortedTicks.length) {
+    sortedTicks.push(0);
+    tickNotes.set(0, new Map([[33, 100]]));
   }
 
-  const ticks = Object.keys(tickMap).map(Number).sort((a, b) => a - b);
-  if (!ticks.length) {
-    ticks.push(0);
-    tickMap[0] = new Map([[33, 100]]);
+  const songLen = sortedTicks[sortedTicks.length - 1];
+  let maxLayers = 1;
+  for (const t of sortedTicks) {
+    const sz = tickNotes.get(t).size;
+    if (sz > maxLayers) maxLayers = sz;
   }
-
-  const songLen    = ticks[ticks.length - 1];
-  const layerCount = Math.max(1, ...ticks.map(t => tickMap[t].size));
 
   const parts = [];
   const u8  = v => { const b = new Uint8Array(1); b[0] = v & 0xFF; parts.push(b); };
@@ -377,60 +399,54 @@ function buildNbs(events, songName, bpm, instName) {
     if (e.length > 0) parts.push(e);
   };
 
-  // Header (NBS v5)
-  i16(0);          // 0x0000 = new-format flag
-  u8(5);           // NBS version 5
-  u8(16);          // Default vanilla instrument count (16)
-  i16(songLen);    // Song length
-  i16(layerCount); // Song layers
+  // Header (NBS version 5)
+  i16(0);          // 0x0000 = NBS v5 flag
+  u8(5);           // version 5
+  u8(16);          // 16 vanilla instruments
+  i16(songLen);
+  i16(maxLayers);
   str(songName);
-  str('Song to NoteBlock');
-  str('');
-  str('');
-  i16(tempo);
-  u8(0);           // auto-save (off)
+  str("Song to NoteBlock");
+  str("");
+  str("");
+  i16(tempo);      // 2000 = 20 TPS
+  u8(0);           // auto-save off
   u8(10);          // auto-save duration
-  u8(4);           // time signature (4/4)
-  i32(0);          // minutes spent
-  i32(0);          // left clicks
-  i32(0);          // right clicks
-  i32(0);          // blocks added
-  i32(0);          // blocks removed
-  str('');         // song origin
-  u8(0);           // loop off
-  u8(0);           // max loop count
-  i16(0);          // loop start tick
+  u8(4);           // time signature
+  i32(0); i32(0); i32(0); i32(0); i32(0);
+  str("");
+  u8(0); u8(0); i16(0);
 
   // Notes section
   let prevTick = -1;
-  for (const tick of ticks) {
+  for (const tick of sortedTicks) {
     i16(tick - prevTick);
     prevTick = tick;
 
-    const keyVelMap = tickMap[tick];
-    const sortedKeys = [...keyVelMap.keys()].sort((a, b) => a - b);
+    const keyMap = tickNotes.get(tick);
+    const sortedKeys = [...keyMap.keys()].sort((a, b) => a - b);
     let layer = 0;
     let prevLayer = -1;
     for (const key of sortedKeys) {
       i16(layer - prevLayer);
       prevLayer = layer;
       u8(instId);
-      u8(key);
-      u8(keyVelMap.get(key));
-      u8(100);     // panning (100 = center)
-      i16(0);      // pitch (0)
+      u8(key);           // NBS key 33..57
+      u8(keyMap.get(key)); // velocity
+      u8(100);           // center panning
+      i16(0);            // pitch 0
       layer++;
     }
-    i16(0);        // end of tick notes
+    i16(0);
   }
-  i16(0);          // end of notes section
+  i16(0);
 
   // Layers section
-  for (let i = 0; i < layerCount; i++) {
-    str('Layer ' + (i + 1));
-    u8(0);         // lock = false
-    u8(100);       // volume
-    u8(100);       // panning = center (100)
+  for (let i = 0; i < maxLayers; i++) {
+    str("Layer " + (i + 1));
+    u8(0);   // lock = false
+    u8(100); // volume
+    u8(100); // panning
   }
 
   // Custom instruments count (0)
@@ -443,77 +459,66 @@ function buildNbs(events, songName, bpm, instName) {
   return out;
 }
 
-const HOP = 1024;
-const SENS_THRESH = { high: -50, med: -38, low: -26 };
+const SENS_THRESH = { high: -44, med: -34, low: -24 };
 
-async function convert(file, opts, log, setProg) {
+async function processAudioFile(file, opts, log, setProg) {
   log('Reading audio file...');
-  setProg(10);
+  setProg(5);
 
   const arrBuf = await file.arrayBuffer();
-  const actx   = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
+  const actx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
   let audioBuf;
   try {
     audioBuf = await actx.decodeAudioData(arrBuf);
   } catch (e) {
-    throw new Error('Unable to decode audio format. Please use WAV, OGG, or MP3.');
+    throw new Error('Unable to decode audio format. Please try converting your file to WAV or MP3.');
   }
   await actx.close();
 
-  const sr  = audioBuf.sampleRate;
+  const sr = audioBuf.sampleRate;
   const len = audioBuf.length;
   const mono = new Float32Array(len);
   for (let ch = 0; ch < audioBuf.numberOfChannels; ch++) {
     const d = audioBuf.getChannelData(ch);
     for (let i = 0; i < len; i++) mono[i] += d[i] / audioBuf.numberOfChannels;
   }
-  log('Loaded: ' + (len / sr).toFixed(1) + 's');
-  setProg(20);
+  const durationSec = (len / sr).toFixed(1);
+  log('Loaded: ' + durationSec + 's audio');
+  setProg(15);
 
-  const thresh      = SENS_THRESH[opts.sens] ?? -38;
-  const totalFrames = Math.floor((len - FFT_N) / HOP) + 1;
-  const allPeaks    = [];
-  log('Processing audio frames...');
+  const tps = parseInt(opts.tps) || 20;
+  const thresh = SENS_THRESH[opts.sens] ?? -34;
 
-  const CHUNK = 300;
-  for (let f = 0; f < totalFrames; f += CHUNK) {
-    const end = Math.min(f + CHUNK, totalFrames);
-    for (let ff = f; ff < end; ff++) {
-      allPeaks.push(framePeaks(mono, ff * HOP, sr, 25, thresh));
-    }
-    setProg(20 + Math.round((f / totalFrames) * 55));
-    await new Promise(r => setTimeout(r, 0));
-  }
-  setProg(75);
-
-  log('Extracting notes...');
-  const events = trackNotes(allPeaks, HOP, sr, 0.07);
-  if (!events.length) throw new Error('No notes found. Try a higher sensitivity.');
+  log('Extracting clean notes (harmonic suppression + tempo sync @ ' + tps + ' TPS)...');
+  const { tickNotes, totalTicks } = extractCleanNotes(mono, sr, opts.mode, thresh, tps, p => {
+    setProg(15 + p);
+  });
   setProg(85);
 
-  let bpm = parseFloat(opts.bpm) || 0;
-  if (bpm <= 0) { bpm = detectBpm(events); log('BPM (auto): ' + bpm); }
-  else log('BPM: ' + bpm);
+  let totalNotesCount = 0;
+  const uniqueKeys = new Set();
+  for (const [t, kmap] of tickNotes) {
+    totalNotesCount += kmap.size;
+    for (const k of kmap.keys()) uniqueKeys.add(k);
+  }
 
-  const songName = (opts.songName || file.name.replace(/\.[^.]+$/, '')).slice(0, 64);
-  log('Generating .NBS file...');
-  const bytes = buildNbs(events, songName, bpm, opts.inst);
+  log('Extracted ' + totalNotesCount + ' note events across ' + uniqueKeys.size + '/25 Minecraft keys.');
+  setProg(92);
+
+  const songName = (file.name.replace(/\.[^.]+$/, '')).slice(0, 64);
+  log('Building .NBS binary file...');
+  const bytes = buildNbsBinary(tickNotes, totalTicks, songName, tps, opts.inst);
   setProg(100);
-
-  const foldedMidis = events.map(e => foldMidi(e.midi));
-  const uniqueKeys  = new Set(foldedMidis);
-  const dur         = Math.max(...events.map(e => e.endSec)).toFixed(1);
+  log('Complete! Song matches 1:1 original speed.');
 
   return {
     bytes,
     stats: {
-      notes: events.length,
-      bpm,
-      dur,
+      notes: totalNotesCount,
+      tps,
+      dur: durationSec,
       keys: uniqueKeys.size,
-      lo: midiName(Math.min(...foldedMidis)),
-      hi: midiName(Math.max(...foldedMidis)),
-      songName,
+      songName
     }
   };
 }
@@ -560,24 +565,23 @@ convertBtn.addEventListener('click', async () => {
   logEl.innerHTML = '';
 
   const opts = {
-    bpm:      document.getElementById('bpm').value,
-    sens:     document.getElementById('sens').value,
-    inst:     document.getElementById('inst').value,
-    songName: document.getElementById('songName').value.trim(),
+    mode: document.getElementById('mode').value,
+    tps:  document.getElementById('tpsSelect').value,
+    inst: document.getElementById('inst').value,
+    sens: document.getElementById('sens').value,
   };
 
   try {
-    const result = await convert(curFile, opts, addLog, p => { progressFill.style.width = p + '%'; });
+    const result = await processAudioFile(curFile, opts, addLog, p => { progressFill.style.width = p + '%'; });
     const s = result.stats;
     dlBlob = new Blob([result.bytes], { type: 'application/octet-stream' });
     dlName = s.songName.replace(/[^\w\- ]/g, '_').trim() + '.nbs';
     downloadBtn.style.display = 'block';
     statsEl.innerHTML =
       '<strong>' + s.notes + '</strong> notes &middot; ' +
-      '<strong>' + s.bpm + '</strong> BPM &middot; ' +
-      '<strong>' + s.dur + 's</strong><br>' +
-      '<strong>' + s.keys + '/25</strong> keys used &middot; ' +
-      'range: ' + s.lo + ' &ndash; ' + s.hi;
+      '<strong>' + s.tps + ' TPS</strong> (1:1 Original Speed) &middot; ' +
+      '<strong>' + s.dur + 's</strong> duration<br>' +
+      '<strong>' + s.keys + '/25</strong> vanilla Minecraft keys used';
     statsEl.style.display = 'block';
   } catch (e) {
     addLog('Error: ' + e.message);
