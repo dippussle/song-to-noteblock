@@ -18,7 +18,7 @@ body {
 }
 .container {
   width: 100%;
-  max-width: 460px;
+  max-width: 480px;
 }
 h1 {
   font-size: 1.3rem;
@@ -161,7 +161,7 @@ input:focus, select:focus {
 
 <div class="container">
   <h1>Song to Note Block</h1>
-  <p class="subtitle">Convert audio into clear vanilla Minecraft note block music</p>
+  <p class="subtitle">Convert audio into full 25-note vanilla Minecraft music</p>
 
   <div class="dropzone" id="dropzone">
     <p id="fileLabel">Select or drop audio/video file</p>
@@ -171,18 +171,36 @@ input:focus, select:focus {
 
   <div class="grid">
     <div class="field">
-      <label for="arrangement">Arrangement</label>
-      <select id="arrangement">
-        <option value="auto_orchestra" selected>Smart Orchestra (Bass + Piano + Bells)</option>
-        <option value="piano_only">Harp / Piano Solo</option>
-        <option value="lead_only">Lead Melody Only</option>
+      <label for="instMode">Instrument Preset</label>
+      <select id="instMode">
+        <option value="orchestra" selected>Full Band (Bass + Pling/Guitar + Piano)</option>
+        <option value="pling">Pling Guitar (Punchy Lead)</option>
+        <option value="harp">Harp (Classic Piano)</option>
+        <option value="flute">Flute (Smooth Lead)</option>
       </select>
     </div>
     <div class="field">
-      <label for="clarity">Clarity Level</label>
-      <select id="clarity">
-        <option value="crystal" selected>Crystal Clear (Remove noise/clutter)</option>
-        <option value="rich">Rich Chords (More harmonies)</option>
+      <label for="speedMode">Timing & Speed (TPS)</label>
+      <select id="speedMode">
+        <option value="20" selected>20 TPS (Original Real-Time 1:1 Speed)</option>
+        <option value="10">10 TPS (Redstone Repeater Standard Speed)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="sensitivity">Melody Sensitivity</label>
+      <select id="sensitivity">
+        <option value="high" selected>High (Capture full riffs & solos)</option>
+        <option value="med">Medium (Balanced)</option>
+        <option value="low">Low (Only loudest notes)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="maxChords">Max Chords per Beat</label>
+      <select id="maxChords">
+        <option value="4" selected>Up to 4 notes (Melody + Harmony + Bass)</option>
+        <option value="2">2 notes (Lead + Bass only)</option>
+        <option value="1">1 note (Solo Melody only)</option>
+        <option value="25">Unlimited (All detected notes)</option>
       </select>
     </div>
   </div>
@@ -198,7 +216,7 @@ input:focus, select:focus {
   <div class="stats" id="stats"></div>
 </div>
 
-<div class="version-tag">v2.0.0</div>
+<div class="version-tag">v2.1.0</div>
 
 <script type="module">
 import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/+esm';
@@ -206,42 +224,43 @@ import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsd
 const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/model/model.json';
 let basicPitchInstance = null;
 
-// Minecraft Vanilla Instruments
-const NBS_HARP  = 0; // Dirt (Piano / Lead)
-const NBS_BASS  = 1; // Wood (Bass Guitar)
-const NBS_FLUTE = 6; // Clay (Flute)
-const NBS_BELL  = 7; // Gold (Bell / Chime)
-const NBS_PLING = 15; // Glowstone (Electric Guitar/Pling)
+// Vanilla Minecraft instrument constants
+const NBS_HARP  = 0;  // Dirt (Piano)
+const NBS_BASS  = 1;  // Wood (Bass Guitar)
+const NBS_FLUTE = 6;  // Clay (Flute)
+const NBS_BELL  = 7;  // Gold (Bell)
+const NBS_GUITAR = 5; // Wool (Guitar)
+const NBS_PLING = 15; // Glowstone (Pling Guitar - best for anime/rock solos)
 
-// MIDI pitch bounds for vanilla 25 notes
-const MIDI_FSHARP3 = 54;
-const MIDI_FSHARP5 = 78;
+const MIDI_LO = 54; // F#3
+const MIDI_HI = 78; // F#5
 
 function foldToVanillaRange(midi) {
   let m = midi;
-  while (m < MIDI_FSHARP3) m += 12;
-  while (m > MIDI_FSHARP5) m -= 12;
-  return Math.max(MIDI_FSHARP3, Math.min(MIDI_FSHARP5, m));
+  while (m < MIDI_LO) m += 12;
+  while (m > MIDI_HI) m -= 12;
+  return Math.max(MIDI_LO, Math.min(MIDI_HI, m));
 }
 
-// Smart Instrument Assignment:
-// Bass notes (MIDI < 50) -> Bass guitar
-// Mid notes (50..74)     -> Harp (Piano)
-// High notes (> 74)      -> Bell / Flute
-function assignInstrument(originalMidi, arrangement) {
-  if (arrangement === 'piano_only') return NBS_HARP;
+function assignInstrument(originalMidi, mode) {
+  if (mode === 'pling') return NBS_PLING;
+  if (mode === 'harp') return NBS_HARP;
+  if (mode === 'flute') return NBS_FLUTE;
 
-  if (originalMidi < 50) {
-    return NBS_BASS;
-  } else if (originalMidi <= 74) {
-    return NBS_HARP;
+  // 'orchestra' preset:
+  if (originalMidi < 48) {
+    return NBS_BASS;  // Bass line
+  } else if (originalMidi <= 66) {
+    return NBS_PLING; // Punchy main lead / guitar
+  } else if (originalMidi <= 78) {
+    return NBS_HARP;  // Mid-high piano/synth
   } else {
-    return NBS_BELL;
+    return NBS_BELL;  // High accents
   }
 }
 
 function buildNbsBinary(tickNotes, songName, tps) {
-  const tempo = Math.round(tps * 100); // 20 TPS -> 2000
+  const tempo = Math.round(tps * 100);
 
   const sortedTicks = [...tickNotes.keys()].sort((a, b) => a - b);
   if (!sortedTicks.length) {
@@ -276,7 +295,7 @@ function buildNbsBinary(tickNotes, songName, tps) {
   str("Song to NoteBlock");
   str("");
   str("");
-  i16(tempo);      // 2000 = 20 TPS (1:1 real-time speed)
+  i16(tempo);      // TPS * 100 (e.g. 2000 for 20 TPS, 1000 for 10 TPS)
   u8(0);           // auto-save off
   u8(10);          // auto-save duration
   u8(4);           // time signature 4/4
@@ -296,7 +315,7 @@ function buildNbsBinary(tickNotes, songName, tps) {
     for (const n of noteList) {
       i16(layer - prevLayer);
       prevLayer = layer;
-      u8(n.inst);        // Instrument ID (Bass, Harp, Bell)
+      u8(n.inst);        // Instrument ID
       u8(n.key);         // Key (33..57 vanilla 25 notes)
       u8(n.vel);         // Velocity (0..100)
       u8(100);           // Center panning
@@ -325,70 +344,56 @@ function buildNbsBinary(tickNotes, songName, tps) {
   return out;
 }
 
-// Smart Note Post-Processing:
-// 1. Removes tiny ghost noise notes
-// 2. Separates notes by frequency bands (Bass vs Mid vs High)
-// 3. Selects the most prominent harmonic notes per beat
-function processAndOrchestrateNotes(rawNotes, arrangement, clarity, tps) {
-  // Sort notes by start time
-  const sorted = [...rawNotes].sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
+// Full Musical Transcription Pipeline
+function transcribeToMinecraft(rawNoteEvents, instMode, maxChordsLimit, tps) {
+  const sorted = [...rawNoteEvents].sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
 
-  // Filter thresholds based on clarity
-  const minAmp = clarity === 'crystal' ? 0.38 : 0.25;
-  const minDur = clarity === 'crystal' ? 0.08 : 0.05;
+  const tickMap = new Map(); // tick -> array of notes
 
-  const validNotes = sorted.filter(n => n.amplitude >= minAmp && n.durationSeconds >= minDur);
-
-  const tickMap = new Map(); // tick -> array of { inst, key, vel, origMidi, amp }
-
-  for (const n of validNotes) {
+  for (const n of sorted) {
     const tick = Math.max(0, Math.round(n.startTimeSeconds * tps));
     const origMidi = Math.round(n.pitchMidi);
     const foldedMidi = foldToVanillaRange(origMidi);
     const nbsKey = foldedMidi - 21; // 33..57
 
-    const inst = assignInstrument(origMidi, arrangement);
-    const vel = Math.round(Math.max(30, Math.min(100, n.amplitude * 110)));
+    const inst = assignInstrument(origMidi, instMode);
+    const vel = Math.round(Math.max(35, Math.min(100, n.amplitude * 115)));
 
     if (!tickMap.has(tick)) tickMap.set(tick, []);
-    tickMap.get(tick).push({ inst, key: nbsKey, vel, origMidi, amp: n.amplitude });
+    tickMap.get(tick).push({
+      inst,
+      key: nbsKey,
+      vel,
+      origMidi,
+      amp: n.amplitude,
+      dur: n.durationSeconds
+    });
   }
 
-  // Clean up each tick to prevent cacophony
+  // Select the cleanest, most prominent notes for each tick
   const cleanedTicks = new Map();
-  let lastInstKeyTick = new Map(); // `${inst}_${key}` -> lastTick
 
   for (const [tick, notes] of tickMap) {
-    // Sort notes in this tick by loudness
+    // Sort by amplitude descending (loudest main notes first)
     notes.sort((a, b) => b.amp - a.amp);
 
     const chosen = [];
-    const usedKeysInTick = new Set();
-    const usedInstsInTick = new Map();
-
-    const maxNotesThisTick = arrangement === 'lead_only' ? 1 : (clarity === 'crystal' ? 3 : 5);
+    const usedKeys = new Set();
+    const instCounts = new Map();
 
     for (const n of notes) {
-      if (chosen.length >= maxNotesThisTick) break;
+      if (chosen.length >= maxChordsLimit) break;
 
-      const instCount = usedInstsInTick.get(n.inst) || 0;
-      // Max 1 bass note, max 2 melody notes per tick
-      if (n.inst === NBS_BASS && instCount >= 1) continue;
-      if (n.inst === NBS_BELL && instCount >= 1) continue;
-      if (n.inst === NBS_HARP && instCount >= 2) continue;
+      const instCnt = instCounts.get(n.inst) || 0;
+      if (n.inst === NBS_BASS && instCnt >= 1) continue; // Max 1 bass root note
+      if (instCnt >= 3) continue; // Max 3 per instrument
 
-      // Deduplicate identical key on same tick
       const keyId = `${n.inst}_${n.key}`;
-      if (usedKeysInTick.has(keyId)) continue;
-
-      // Prevent machine-gun rapid re-triggering of exact same note block (min 2 ticks gap)
-      const prevTick = lastInstKeyTick.get(keyId) ?? -999;
-      if (tick - prevTick < 2) continue;
+      if (usedKeys.has(keyId)) continue; // No duplicate on same tick
 
       chosen.push(n);
-      usedKeysInTick.add(keyId);
-      usedInstsInTick.set(n.inst, instCount + 1);
-      lastInstKeyTick.set(keyId, tick);
+      usedKeys.add(keyId);
+      instCounts.set(n.inst, instCnt + 1);
     }
 
     if (chosen.length > 0) {
@@ -399,8 +404,8 @@ function processAndOrchestrateNotes(rawNotes, arrangement, clarity, tps) {
   return cleanedTicks;
 }
 
-async function runHighQualityConversion(file, opts, log, setProg) {
-  log('Reading ' + file.name + '...');
+async function runConversion(file, opts, log, setProg) {
+  log('Loading ' + file.name + '...');
   setProg(5);
 
   const arrBuf = await file.arrayBuffer();
@@ -409,10 +414,10 @@ async function runHighQualityConversion(file, opts, log, setProg) {
   try {
     decoded = await actx.decodeAudioData(arrBuf);
   } catch (e) {
-    throw new Error('Could not decode audio. Please ensure the file is an MP3, WAV, MP4, or OGG file.');
+    throw new Error('Unable to decode audio. Please ensure file is a valid MP3, WAV, MP4, or OGG.');
   }
 
-  // Downmix to true Mono AudioBuffer for the AI Neural Network
+  // Downmix to true Mono AudioBuffer
   const monoBuffer = actx.createBuffer(1, decoded.length, 22050);
   const monoChannel = monoBuffer.getChannelData(0);
   const numChannels = decoded.numberOfChannels;
@@ -427,15 +432,15 @@ async function runHighQualityConversion(file, opts, log, setProg) {
   await actx.close();
 
   const durationSec = monoBuffer.duration.toFixed(1);
-  log('Audio loaded: ' + durationSec + 's duration.');
+  log('Audio loaded: ' + durationSec + 's.');
   setProg(15);
 
   if (!basicPitchInstance) {
-    log('Loading Spotify Pitch Neural Network...');
+    log('Loading Spotify AI Pitch Model...');
     basicPitchInstance = new BasicPitch(MODEL_URL);
   }
 
-  log('Transcribing music with AI Neural Network...');
+  log('Running AI Transcription...');
   const frames = [];
   const onsets = [];
   const contours = [];
@@ -452,12 +457,23 @@ async function runHighQualityConversion(file, opts, log, setProg) {
     }
   );
 
-  log('Orchestrating Minecraft note block layers...');
+  log('Extracting musical notes...');
   setProg(85);
 
-  const onsetThresh = opts.clarity === 'crystal' ? 0.6 : 0.45;
-  const frameThresh = opts.clarity === 'crystal' ? 0.4 : 0.3;
-  const minNoteLen  = opts.clarity === 'crystal' ? 7 : 5;
+  // Dynamic sensitivity thresholds based on user setting
+  let onsetThresh = 0.35;
+  let frameThresh = 0.20;
+  let minNoteLen  = 3;
+
+  if (opts.sensitivity === 'med') {
+    onsetThresh = 0.45;
+    frameThresh = 0.28;
+    minNoteLen  = 4;
+  } else if (opts.sensitivity === 'low') {
+    onsetThresh = 0.58;
+    frameThresh = 0.38;
+    minNoteLen  = 6;
+  }
 
   const rawNoteEvents = outputToNotesPoly(
     frames,
@@ -468,30 +484,24 @@ async function runHighQualityConversion(file, opts, log, setProg) {
     true,
     null,
     null,
-    true // Melodia trick for clean melody extraction
+    true // Melodia trick for extracting the main lead melody
   );
 
   const noteEvents = noteFramesToTime(rawNoteEvents);
-  log('Detected ' + noteEvents.length + ' raw note events.');
+  log('Transcribed ' + noteEvents.length + ' melodic note events.');
+  setProg(92);
 
-  const tps = 20; // 20 TPS = 1:1 real-time Minecraft speed
-  const orchestratedTicks = processAndOrchestrateNotes(noteEvents, opts.arrangement, opts.clarity, tps);
+  const tps = parseInt(opts.speedMode) || 20;
+  const maxChordsLimit = parseInt(opts.maxChords) || 4;
 
-  let totalNotesCount = 0;
-  let bassCount = 0, harpCount = 0, bellCount = 0;
-  for (const [t, list] of orchestratedTicks) {
-    totalNotesCount += list.length;
-    for (const n of list) {
-      if (n.inst === NBS_BASS) bassCount++;
-      else if (n.inst === NBS_HARP) harpCount++;
-      else if (n.inst === NBS_BELL) bellCount++;
-    }
-  }
+  const orchestratedTicks = transcribeToMinecraft(noteEvents, opts.instMode, maxChordsLimit, tps);
 
-  log('Orchestrated: ' + harpCount + ' Piano + ' + bassCount + ' Bass + ' + bellCount + ' Bell notes.');
-  setProg(95);
+  let totalNotes = 0;
+  for (const [t, list] of orchestratedTicks) totalNotes += list.length;
 
-  log('Building .NBS file (20 TPS)...');
+  log('Mapped ' + totalNotes + ' notes onto vanilla Minecraft note blocks at ' + tps + ' TPS.');
+  setProg(96);
+
   const songName = (file.name.replace(/\.[^.]+$/, '')).slice(0, 64);
   const bytes = buildNbsBinary(orchestratedTicks, songName, tps);
   setProg(100);
@@ -500,10 +510,7 @@ async function runHighQualityConversion(file, opts, log, setProg) {
   return {
     bytes,
     stats: {
-      notes: totalNotesCount,
-      harp: harpCount,
-      bass: bassCount,
-      bell: bellCount,
+      notes: totalNotes,
       tps,
       dur: durationSec,
       songName
@@ -553,20 +560,22 @@ convertBtn.addEventListener('click', async () => {
   logEl.innerHTML = '';
 
   const opts = {
-    arrangement: document.getElementById('arrangement').value,
-    clarity:     document.getElementById('clarity').value,
+    instMode:    document.getElementById('instMode').value,
+    speedMode:   document.getElementById('speedMode').value,
+    sensitivity: document.getElementById('sensitivity').value,
+    maxChords:   document.getElementById('maxChords').value,
   };
 
   try {
-    const result = await runHighQualityConversion(curFile, opts, addLog, p => { progressFill.style.width = p + '%'; });
+    const result = await runConversion(curFile, opts, addLog, p => { progressFill.style.width = p + '%'; });
     const s = result.stats;
     dlBlob = new Blob([result.bytes], { type: 'application/octet-stream' });
     dlName = s.songName.replace(/[^\w\- ]/g, '_').trim() + '.nbs';
     downloadBtn.style.display = 'block';
     statsEl.innerHTML =
-      '<strong>' + s.notes + '</strong> clean notes total &middot; ' +
-      '<strong>' + s.dur + 's</strong> duration<br>' +
-      'Orchestra: <strong>' + s.harp + '</strong> Piano &middot; <strong>' + s.bass + '</strong> Bass &middot; <strong>' + s.bell + '</strong> Bells';
+      '<strong>' + s.notes + '</strong> notes total &middot; ' +
+      '<strong>' + s.dur + 's</strong> audio duration<br>' +
+      'Playback Grid: <strong>' + s.tps + ' TPS</strong> (Note Block Studio speed)';
     statsEl.style.display = 'block';
   } catch (e) {
     addLog('Error: ' + e.message);
