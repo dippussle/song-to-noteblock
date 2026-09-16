@@ -161,7 +161,7 @@ input:focus, select:focus {
 
 <div class="container">
   <h1>Song to Note Block</h1>
-  <p class="subtitle">Convert audio into 25-note vanilla Harp note blocks</p>
+  <p class="subtitle">Convert audio into tight, punchy vanilla Harp note block music</p>
 
   <div class="dropzone" id="dropzone">
     <p id="fileLabel">Select or drop audio/video file</p>
@@ -171,20 +171,36 @@ input:focus, select:focus {
 
   <div class="grid">
     <div class="field">
-      <label for="sensitivity">Sensitivity</label>
-      <select id="sensitivity">
-        <option value="high" selected>High (Capture fast solos & riffs)</option>
-        <option value="med">Medium (Balanced)</option>
-        <option value="low">Low (Only loudest notes)</option>
+      <label for="speedFactor">Speed & Energy</label>
+      <select id="speedFactor">
+        <option value="1.0" selected>Normal Speed (1.0x)</option>
+        <option value="1.15">Brisk & Energetic (1.15x)</option>
+        <option value="1.25">Fast Pace (1.25x)</option>
+        <option value="1.5">High Speed (1.5x)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="rhythmMode">Rhythm Tightness</label>
+      <select id="rhythmMode">
+        <option value="smooth" selected>Smooth & Anti-Lag (No Stutter)</option>
+        <option value="sharp">Sharp & Staccato</option>
+        <option value="raw">Raw Unfiltered</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="clarity">Melody Punch</label>
+      <select id="clarity">
+        <option value="punchy" selected>Punchy & Loud (Boosted)</option>
+        <option value="natural">Natural Volume</option>
       </select>
     </div>
     <div class="field">
       <label for="polyphony">Max Notes at Once</label>
       <select id="polyphony">
-        <option value="4" selected>Up to 4 Harp notes (Full Chords)</option>
-        <option value="2">2 Harp notes (Lead + Bass)</option>
-        <option value="1">1 Harp note (Lead Melody Only)</option>
-        <option value="25">Unlimited (All 25 notes)</option>
+        <option value="3" selected>Up to 3 Harp Notes (Clean)</option>
+        <option value="2">2 Harp Notes (Lead + Bass)</option>
+        <option value="1">1 Harp Note (Solo Melody)</option>
+        <option value="25">Unlimited (All Notes)</option>
       </select>
     </div>
   </div>
@@ -200,7 +216,7 @@ input:focus, select:focus {
   <div class="stats" id="stats"></div>
 </div>
 
-<div class="version-tag">v2.2.0</div>
+<div class="version-tag">v2.3.0</div>
 
 <script type="module">
 import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/+esm';
@@ -208,12 +224,10 @@ import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsd
 const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/model/model.json';
 let basicPitchInstance = null;
 
-// ONLY HARP (0) for 100% vanilla note block on dirt/grass
-const NBS_HARP = 0;
+const NBS_HARP = 0; // 100% Harp only
 
-// Vanilla 25-note range: F#3 to F#5 (MIDI 54 to 78) -> NBS keys 33 to 57
-const MIDI_LO = 54;
-const MIDI_HI = 78;
+const MIDI_LO = 54; // F#3
+const MIDI_HI = 78; // F#5
 
 function foldToVanillaRange(midi) {
   let m = midi;
@@ -258,7 +272,7 @@ function buildNbsBinary(tickNotes, songName, tps) {
   str("Song to NoteBlock");
   str("");
   str("");
-  i16(tempo);      // 2000 = 20 TPS (1:1 original song speed)
+  i16(tempo);      // TPS * 100
   u8(0);           // auto-save off
   u8(10);          // auto-save duration
   u8(4);           // time signature 4/4
@@ -307,18 +321,43 @@ function buildNbsBinary(tickNotes, songName, tps) {
   return out;
 }
 
-function transcribeHarpOnly(rawNoteEvents, polyphonyLimit, tps) {
-  const sorted = [...rawNoteEvents].sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
+// Anti-Stutter & Rhythm Tightening Pipeline
+function processCleanRhythm(noteEvents, polyphonyLimit, tps, speedFactor, rhythmMode, clarity) {
+  // Sort notes by start time
+  const sorted = [...noteEvents].sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
 
+  // 1. Merge micro-stutters: if the exact same note starts within 70ms of previous note end, merge it
+  const mergedNotes = [];
+  for (const n of sorted) {
+    const prev = mergedNotes[mergedNotes.length - 1];
+    if (prev && prev.pitchMidi === n.pitchMidi && (n.startTimeSeconds - (prev.startTimeSeconds + prev.durationSeconds) < 0.07)) {
+      // Extend previous note duration instead of stutter-hitting
+      prev.durationSeconds = (n.startTimeSeconds + n.durationSeconds) - prev.startTimeSeconds;
+      prev.amplitude = Math.max(prev.amplitude, n.amplitude);
+    } else {
+      mergedNotes.push({ ...n });
+    }
+  }
+
+  // 2. Map into smooth ticks
   const tickMap = new Map();
 
-  for (const n of sorted) {
-    const tick = Math.max(0, Math.round(n.startTimeSeconds * tps));
+  for (const n of mergedNotes) {
+    // Apply speed factor to compress time (makes playback faster/tighter)
+    const adjustedTime = n.startTimeSeconds / speedFactor;
+    const tick = Math.max(0, Math.round(adjustedTime * tps));
+
     const origMidi = Math.round(n.pitchMidi);
     const foldedMidi = foldToVanillaRange(origMidi);
     const nbsKey = foldedMidi - 21; // 33..57
 
-    const vel = Math.round(Math.max(35, Math.min(100, n.amplitude * 115)));
+    // Punchy velocity boosting for clear audibility
+    let vel = Math.round(n.amplitude * 125);
+    if (clarity === 'punchy') {
+      vel = Math.max(55, Math.min(100, Math.round(50 + n.amplitude * 55))); // Boosted 55-100 range
+    } else {
+      vel = Math.max(30, Math.min(100, vel));
+    }
 
     if (!tickMap.has(tick)) tickMap.set(tick, []);
     tickMap.get(tick).push({
@@ -329,10 +368,12 @@ function transcribeHarpOnly(rawNoteEvents, polyphonyLimit, tps) {
     });
   }
 
+  // 3. Clean and de-clutter each tick
   const cleanedTicks = new Map();
+  let lastKeyTick = new Map();
 
   for (const [tick, notes] of tickMap) {
-    // Sort by amplitude descending (loudest main melody notes first)
+    // Sort by amplitude descending (loudest main melody first)
     notes.sort((a, b) => b.amp - a.amp);
 
     const chosen = [];
@@ -340,10 +381,17 @@ function transcribeHarpOnly(rawNoteEvents, polyphonyLimit, tps) {
 
     for (const n of notes) {
       if (chosen.length >= polyphonyLimit) break;
-      if (usedKeys.has(n.key)) continue; // Don't hit same harp block twice at same tick
+      if (usedKeys.has(n.key)) continue;
+
+      if (rhythmMode === 'smooth') {
+        // Prevent machine-gun jitter of the exact same key within 1 tick
+        const prevT = lastKeyTick.get(n.key) ?? -999;
+        if (tick - prevT < 2 && n.amp < 0.6) continue;
+      }
 
       chosen.push(n);
       usedKeys.add(n.key);
+      lastKeyTick.set(n.key, tick);
     }
 
     if (chosen.length > 0) {
@@ -364,7 +412,7 @@ async function runConversion(file, opts, log, setProg) {
   try {
     decoded = await actx.decodeAudioData(arrBuf);
   } catch (e) {
-    throw new Error('Could not decode audio. Please ensure file is a valid MP3, WAV, MP4, or OGG.');
+    throw new Error('Could not decode audio. Please ensure file is an MP3, WAV, MP4, or OGG.');
   }
 
   // Downmix to mono AudioBuffer
@@ -386,11 +434,11 @@ async function runConversion(file, opts, log, setProg) {
   setProg(15);
 
   if (!basicPitchInstance) {
-    log('Loading Spotify AI Model...');
+    log('Loading Spotify AI Pitch Model...');
     basicPitchInstance = new BasicPitch(MODEL_URL);
   }
 
-  log('Transcribing music with AI Neural Network...');
+  log('Running AI Transcription...');
   const frames = [];
   const onsets = [];
   const contours = [];
@@ -407,43 +455,38 @@ async function runConversion(file, opts, log, setProg) {
     }
   );
 
-  log('Extracting Harp note block events...');
+  log('Tightening rhythm & melody lines...');
   setProg(85);
 
-  let onsetThresh = 0.35;
-  let frameThresh = 0.20;
-  let minNoteLen  = 3;
-
-  if (opts.sensitivity === 'med') {
-    onsetThresh = 0.45;
-    frameThresh = 0.28;
-    minNoteLen  = 4;
-  } else if (opts.sensitivity === 'low') {
-    onsetThresh = 0.58;
-    frameThresh = 0.38;
-    minNoteLen  = 6;
-  }
-
+  // Optimized thresholds for tight melody capture
   const rawNoteEvents = outputToNotesPoly(
     frames,
     onsets,
-    onsetThresh,
-    frameThresh,
-    minNoteLen,
+    0.38,  // onsetThresh
+    0.22,  // frameThresh
+    3,     // minNoteLen
     true,
     null,
     null,
-    true
+    true   // melodiaTrick for extracting clean lead melody
   );
 
   const noteEvents = noteFramesToTime(rawNoteEvents);
-  log('Transcribed ' + noteEvents.length + ' melodic note events.');
+  log('Transcribed ' + noteEvents.length + ' melodic notes.');
   setProg(92);
 
-  const tps = 20; // 20 TPS = 1:1 real-time original speed
-  const polyphonyLimit = parseInt(opts.polyphony) || 4;
+  const tps = 20; // 20 TPS base clock
+  const speedFactor = parseFloat(opts.speedFactor) || 1.0;
+  const polyphonyLimit = parseInt(opts.polyphony) || 3;
 
-  const harpTicks = transcribeHarpOnly(noteEvents, polyphonyLimit, tps);
+  const harpTicks = processCleanRhythm(
+    noteEvents,
+    polyphonyLimit,
+    tps,
+    speedFactor,
+    opts.rhythmMode,
+    opts.clarity
+  );
 
   let totalHarpNotes = 0;
   const uniqueKeys = new Set();
@@ -452,21 +495,21 @@ async function runConversion(file, opts, log, setProg) {
     for (const n of list) uniqueKeys.add(n.key);
   }
 
-  log('Mapped ' + totalHarpNotes + ' notes onto ' + uniqueKeys.size + '/25 Harp note blocks.');
+  log('Smoothed into ' + totalHarpNotes + ' punchy notes at ' + speedFactor + 'x speed.');
   setProg(96);
 
   const songName = (file.name.replace(/\.[^.]+$/, '')).slice(0, 64);
   const bytes = buildNbsBinary(harpTicks, songName, tps);
   setProg(100);
-  log('Conversion complete!');
+  log('Ready to download!');
 
   return {
     bytes,
     stats: {
       notes: totalHarpNotes,
       keys: uniqueKeys.size,
-      tps,
-      dur: durationSec,
+      speed: speedFactor + 'x',
+      dur: (durationSec / speedFactor).toFixed(1),
       songName
     }
   };
@@ -514,7 +557,9 @@ convertBtn.addEventListener('click', async () => {
   logEl.innerHTML = '';
 
   const opts = {
-    sensitivity: document.getElementById('sensitivity').value,
+    speedFactor: document.getElementById('speedFactor').value,
+    rhythmMode:  document.getElementById('rhythmMode').value,
+    clarity:     document.getElementById('clarity').value,
     polyphony:   document.getElementById('polyphony').value,
   };
 
@@ -525,9 +570,10 @@ convertBtn.addEventListener('click', async () => {
     dlName = s.songName.replace(/[^\w\- ]/g, '_').trim() + '.nbs';
     downloadBtn.style.display = 'block';
     statsEl.innerHTML =
-      '<strong>' + s.notes + '</strong> Harp notes total &middot; ' +
-      '<strong>' + s.keys + '/25</strong> vanilla notes used<br>' +
-      '<strong>' + s.dur + 's</strong> duration &middot; 100% Harp Instrument (Dirt)';
+      '<strong>' + s.notes + '</strong> punchy Harp notes &middot; ' +
+      'Speed: <strong>' + s.speed + '</strong><br>' +
+      'Effective Duration: <strong>' + s.dur + 's</strong> &middot; ' +
+      '<strong>' + s.keys + '/25</strong> vanilla Harp notes';
     statsEl.style.display = 'block';
   } catch (e) {
     addLog('Error: ' + e.message);
