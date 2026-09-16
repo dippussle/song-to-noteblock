@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Song to Note Block</title>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -102,7 +101,7 @@ h1 {
   font-family: monospace;
   font-size: 0.75rem;
   color: #777777;
-  max-height: 100px;
+  max-height: 120px;
   overflow-y: auto;
   margin-top: 10px;
 }
@@ -135,7 +134,7 @@ h1 {
 
 <div class="container">
   <h1>Song to Note Block</h1>
-  <p class="subtitle">Fast AI transcription with smart pedal sustain for 25-note vanilla Harp</p>
+  <p class="subtitle">AI audio to 25-note vanilla Harp note block converter</p>
 
   <div class="dropzone" id="dropzone">
     <p id="fileLabel">Select or drop audio/video file</p>
@@ -154,24 +153,13 @@ h1 {
   <div class="stats" id="stats"></div>
 </div>
 
-<div class="version-tag">v3.1.0 (Smart Pedal)</div>
+<div class="version-tag">v3.2.0</div>
 
 <script type="module">
 import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/+esm';
 
 const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/model/model.json';
 let basicPitchInstance = null;
-
-// Warm up WebGL GPU acceleration
-(async () => {
-  try {
-    if (window.tf) {
-      tf.env().set('WEBGL_FORCE_F16_TEXTURES', true);
-      await tf.setBackend('webgl');
-      await tf.ready();
-    }
-  } catch (e) {}
-})();
 
 const NBS_HARP = 0; // 100% Vanilla Harp on dirt
 const TPS = 20;     // Exact 20.00 TPS Minecraft clock (1 tick = 50ms = 0.05s)
@@ -269,12 +257,11 @@ function buildNbsBinary(tickNotes, songName) {
   return out;
 }
 
-// Smart Sustain Pedal & Note Processor:
-// - Non-pedal / short notes (<0.30s): Trigger cleanly ONCE with strong punch
-// - Long sustained / pedal notes (>0.30s): Trigger initial attack, then pulse with decaying velocity every 4 ticks (200ms) until pedal ends
-function processSmartPedalNotes(noteEvents) {
+// Smart Note Processor:
+// - Normal notes: play cleanly once
+// - Long sustained/pedal notes (>= 0.35s): pulse every 4 ticks (200ms) with decay until end
+function processNotesWithPedal(noteEvents) {
   const sorted = [...noteEvents].sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
-
   const rawTickMap = new Map();
 
   for (const n of sorted) {
@@ -285,30 +272,29 @@ function processSmartPedalNotes(noteEvents) {
     const foldedMidi = foldToVanillaRange(origMidi);
     const nbsKey = foldedMidi - 21; // 33..57
 
-    // 1. Initial primary attack: crisp, clear velocity (70 - 100)
+    // Initial attack velocity (70-100)
     const baseVel = Math.round(Math.max(70, Math.min(100, 60 + n.amplitude * 45)));
 
     if (!rawTickMap.has(startTick)) rawTickMap.set(startTick, []);
     rawTickMap.get(startTick).push({ key: nbsKey, vel: baseVel, amp: n.amplitude });
 
-    // 2. Smart Pedal Sustain:
-    // Only pulse if the note is held/sustained for at least 0.30s (6 ticks)
-    if (n.durationSeconds >= 0.30 && durTicks >= 6) {
-      const pulseStep = 4; // Rhythmic 4-tick pulse (200ms = 8th note interval)
+    // Smart sustain pulse for long held notes (>= 0.35s)
+    if (n.durationSeconds >= 0.35 && durTicks >= 7) {
+      const pulseStep = 4; // 200ms rhythm
       let currentTick = startTick + pulseStep;
-      let decayVel = Math.round(baseVel * 0.75); // Start softer than initial attack
+      let decayVel = Math.round(baseVel * 0.75);
 
       while (currentTick < startTick + durTicks) {
         if (!rawTickMap.has(currentTick)) rawTickMap.set(currentTick, []);
         rawTickMap.get(currentTick).push({ key: nbsKey, vel: decayVel, amp: n.amplitude * 0.7 });
 
-        decayVel = Math.max(35, decayVel - 10); // Natural acoustic decay
+        decayVel = Math.max(35, decayVel - 10);
         currentTick += pulseStep;
       }
     }
   }
 
-  // Clean up each tick to max 3 simultaneous notes
+  // Filter to max 3 notes per tick
   const cleanedTicks = new Map();
 
   for (const [tick, notes] of rawTickMap) {
@@ -333,9 +319,46 @@ function processSmartPedalNotes(noteEvents) {
   return cleanedTicks;
 }
 
-async function runAutoConversion(file, log, setProg) {
+const dropzone    = document.getElementById('dropzone');
+const fileInput   = document.getElementById('fileInput');
+const convertBtn  = document.getElementById('convertBtn');
+const downloadBtn = document.getElementById('downloadBtn');
+const progressBar = document.getElementById('progressBar');
+const progressFill= document.getElementById('progressFill');
+const logEl       = document.getElementById('log');
+const statsEl     = document.getElementById('stats');
+
+let curFile = null, dlBlob = null, dlName = 'song.nbs';
+
+function addLog(msg) {
+  console.log(msg);
+  const d = document.createElement('div');
+  d.textContent = '> ' + msg;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+window.addEventListener('error', e => addLog('Error: ' + e.message));
+window.addEventListener('unhandledrejection', e => addLog('Error: ' + (e.reason ? e.reason.message || e.reason : 'Unknown')));
+
+function setFile(f) {
+  if (!f) return;
+  curFile = f;
+  document.getElementById('fileLabel').textContent = f.name;
+  document.getElementById('fileSub').textContent = (f.size / 1024 / 1024).toFixed(2) + ' MB';
+  convertBtn.disabled = false;
+  addLog('File selected: ' + f.name);
+}
+
+dropzone.addEventListener('click',     ()  => fileInput.click());
+fileInput.addEventListener('change',   e   => setFile(e.target.files[0]));
+dropzone.addEventListener('dragover',  e   => { e.preventDefault(); dropzone.classList.add('dragover'); });
+dropzone.addEventListener('dragleave', ()  => dropzone.classList.remove('dragover'));
+dropzone.addEventListener('drop',      e   => { e.preventDefault(); dropzone.classList.remove('dragover'); setFile(e.dataTransfer.files[0]); });
+
+async function runAutoConversion(file, setProg) {
   const startTime = performance.now();
-  log('Decoding ' + file.name + '...');
+  addLog('Decoding audio: ' + file.name + '...');
   setProg(5);
 
   const arrBuf = await file.arrayBuffer();
@@ -347,7 +370,7 @@ async function runAutoConversion(file, log, setProg) {
     throw new Error('Unable to decode audio. Please ensure file is a valid MP3, WAV, MP4, or OGG.');
   }
 
-  // Fast downmix to mono
+  // Mono downmix
   const monoBuffer = actx.createBuffer(1, decoded.length, 22050);
   const monoChannel = monoBuffer.getChannelData(0);
   const numChannels = decoded.numberOfChannels;
@@ -362,23 +385,15 @@ async function runAutoConversion(file, log, setProg) {
   await actx.close();
 
   const durationSec = monoBuffer.duration;
-  log('Audio loaded: ' + durationSec.toFixed(1) + 's.');
+  addLog('Audio loaded: ' + durationSec.toFixed(1) + 's.');
   setProg(15);
 
-  if (window.tf) {
-    try {
-      tf.env().set('WEBGL_FORCE_F16_TEXTURES', true);
-      await tf.setBackend('webgl');
-      await tf.ready();
-    } catch (e) {}
-  }
-
   if (!basicPitchInstance) {
-    log('Loading Fast AI Pitch Model...');
+    addLog('Loading AI Model...');
     basicPitchInstance = new BasicPitch(MODEL_URL);
   }
 
-  log('Running AI Transcription on GPU...');
+  addLog('Transcribing with AI Neural Network...');
   const frames = [];
   const onsets = [];
   const contours = [];
@@ -395,27 +410,26 @@ async function runAutoConversion(file, log, setProg) {
     }
   );
 
-  log('Detecting notes & smart pedal sustain...');
+  addLog('Extracting note events...');
   setProg(88);
 
-  // Optimal thresholds: captures both soft passages and punchy solos
   const rawNoteEvents = outputToNotesPoly(
     frames,
     onsets,
-    0.32,  // Onset threshold
-    0.18,  // Frame threshold
-    3,     // Min note length (~35ms)
+    0.32,
+    0.18,
+    3,
     true,
     null,
     null,
-    true   // Melodia trick keeps lead melodies clear
+    true
   );
 
   const noteEvents = noteFramesToTime(rawNoteEvents);
-  log('AI transcribed ' + noteEvents.length + ' clean note events.');
+  addLog('Detected ' + noteEvents.length + ' note events.');
   setProg(94);
 
-  const tickNotes = processSmartPedalNotes(noteEvents);
+  const tickNotes = processNotesWithPedal(noteEvents);
 
   let totalHarpNotes = 0;
   const uniqueKeys = new Set();
@@ -429,7 +443,7 @@ async function runAutoConversion(file, log, setProg) {
   setProg(100);
 
   const elapsedTime = ((performance.now() - startTime) / 1000).toFixed(1);
-  log('Done in ' + elapsedTime + 's! Exactly 1:1 real-time speed @ 20.00 TPS.');
+  addLog('Complete in ' + elapsedTime + 's! 1:1 real-time speed @ 20.00 TPS.');
 
   return {
     bytes,
@@ -443,38 +457,6 @@ async function runAutoConversion(file, log, setProg) {
   };
 }
 
-let curFile = null, dlBlob = null, dlName = 'song.nbs';
-
-const dropzone    = document.getElementById('dropzone');
-const fileInput   = document.getElementById('fileInput');
-const convertBtn  = document.getElementById('convertBtn');
-const downloadBtn = document.getElementById('downloadBtn');
-const progressBar = document.getElementById('progressBar');
-const progressFill= document.getElementById('progressFill');
-const logEl       = document.getElementById('log');
-const statsEl     = document.getElementById('stats');
-
-function setFile(f) {
-  if (!f) return;
-  curFile = f;
-  document.getElementById('fileLabel').textContent = f.name;
-  document.getElementById('fileSub').textContent = (f.size / 1024 / 1024).toFixed(2) + ' MB';
-  convertBtn.disabled = false;
-}
-
-dropzone.addEventListener('click',     ()  => fileInput.click());
-fileInput.addEventListener('change',   e   => setFile(e.target.files[0]));
-dropzone.addEventListener('dragover',  e   => { e.preventDefault(); dropzone.classList.add('dragover'); });
-dropzone.addEventListener('dragleave', ()  => dropzone.classList.remove('dragover'));
-dropzone.addEventListener('drop',      e   => { e.preventDefault(); dropzone.classList.remove('dragover'); setFile(e.dataTransfer.files[0]); });
-
-function addLog(msg) {
-  const d = document.createElement('div');
-  d.textContent = '> ' + msg;
-  logEl.appendChild(d);
-  logEl.scrollTop = logEl.scrollHeight;
-}
-
 convertBtn.addEventListener('click', async () => {
   if (!curFile) return;
   convertBtn.disabled = true;
@@ -485,14 +467,14 @@ convertBtn.addEventListener('click', async () => {
   logEl.innerHTML = '';
 
   try {
-    const result = await runAutoConversion(curFile, addLog, p => { progressFill.style.width = p + '%'; });
+    const result = await runAutoConversion(curFile, p => { progressFill.style.width = p + '%'; });
     const s = result.stats;
     dlBlob = new Blob([result.bytes], { type: 'application/octet-stream' });
     dlName = s.songName.replace(/[^\w\- ]/g, '_').trim() + '.nbs';
     downloadBtn.style.display = 'block';
     statsEl.innerHTML =
-      '<strong>' + s.notes + '</strong> Harp notes &middot; Processed in <strong>' + s.elapsed + 's</strong><br>' +
-      'Exact Duration: <strong>' + s.dur + 's</strong> (1:1 Real-Time Speed @ 20.00 TPS)<br>' +
+      '<strong>' + s.notes + '</strong> Harp notes &middot; <strong>' + s.elapsed + 's</strong> processing<br>' +
+      'Duration: <strong>' + s.dur + 's</strong> (1:1 Real-Time Speed @ 20.00 TPS)<br>' +
       '<strong>' + s.keys + '/25</strong> vanilla Harp keys used';
     statsEl.style.display = 'block';
   } catch (e) {
