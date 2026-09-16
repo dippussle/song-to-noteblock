@@ -135,7 +135,7 @@ h1 {
 
 <div class="container">
   <h1>Song to Note Block</h1>
-  <p class="subtitle">Fast GPU-accelerated 25-note vanilla Harp converter</p>
+  <p class="subtitle">Continuous gapless 25-note vanilla Harp converter</p>
 
   <div class="dropzone" id="dropzone">
     <p id="fileLabel">Select or drop audio/video file</p>
@@ -154,7 +154,7 @@ h1 {
   <div class="stats" id="stats"></div>
 </div>
 
-<div class="version-tag">v2.5.0 (GPU-Fast)</div>
+<div class="version-tag">v2.6.0 (Gapless)</div>
 
 <script type="module">
 import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/+esm';
@@ -162,17 +162,14 @@ import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsd
 const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/model/model.json';
 let basicPitchInstance = null;
 
-// Initialize WebGL GPU acceleration in the background immediately
+// Initialize GPU acceleration immediately
 (async () => {
   try {
     if (window.tf) {
       await tf.setBackend('webgl');
       await tf.ready();
-      console.log('GPU Acceleration enabled:', tf.getBackend());
     }
-  } catch (e) {
-    console.log('GPU init fallback:', e);
-  }
+  } catch (e) {}
 })();
 
 const NBS_HARP = 0; // 100% Vanilla Harp on dirt
@@ -194,7 +191,7 @@ function calculateAutoBPM(noteEvents) {
   const iois = [];
   for (let i = 1; i < onsets.length; i++) {
     const diff = (onsets[i] - onsets[i - 1]) / 1000;
-    if (diff > 0.08 && diff < 1.8) {
+    if (diff > 0.06 && diff < 1.8) {
       iois.push(diff);
     }
   }
@@ -292,7 +289,9 @@ function buildNbsBinary(tickNotes, songName, tps) {
   return out;
 }
 
-function autoProcessRhythmAndDelays(noteEvents) {
+// Gapless Continuous Note Processor:
+// Ensures no melody dropouts, soft verses or transitional gaps are missed
+function processGaplessNotes(noteEvents) {
   const sorted = [...noteEvents].sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
 
   const bpm = calculateAutoBPM(sorted);
@@ -304,9 +303,10 @@ function autoProcessRhythmAndDelays(noteEvents) {
     const tick = Math.max(0, Math.round(n.startTimeSeconds * tps));
     const origMidi = Math.round(n.pitchMidi);
     const foldedMidi = foldToVanillaRange(origMidi);
-    const nbsKey = foldedMidi - 21;
+    const nbsKey = foldedMidi - 21; // 33..57
 
-    const vel = Math.round(Math.max(60, Math.min(100, 50 + n.amplitude * 55)));
+    // Clear dynamic velocity (50..100)
+    const vel = Math.round(Math.max(50, Math.min(100, 45 + n.amplitude * 60)));
 
     if (!tickMap.has(tick)) tickMap.set(tick, []);
     tickMap.get(tick).push({
@@ -317,8 +317,8 @@ function autoProcessRhythmAndDelays(noteEvents) {
     });
   }
 
+  // Preserve all musical notes without dropping quiet sections
   const cleanedTicks = new Map();
-  let lastKeyTick = new Map();
 
   for (const [tick, notes] of tickMap) {
     notes.sort((a, b) => b.amp - a.amp);
@@ -327,15 +327,11 @@ function autoProcessRhythmAndDelays(noteEvents) {
     const usedKeys = new Set();
 
     for (const n of notes) {
-      if (chosen.length >= 3) break;
-      if (usedKeys.has(n.key)) continue;
-
-      const prevT = lastKeyTick.get(n.key) ?? -999;
-      if (tick - prevT < 2 && n.amp < 0.65) continue;
+      if (chosen.length >= 4) break; // Allow up to 4 simultaneous notes so harmonies aren't dropped
+      if (usedKeys.has(n.key)) continue; // Deduplicate same pitch on same tick
 
       chosen.push(n);
       usedKeys.add(n.key);
-      lastKeyTick.set(n.key, tick);
     }
 
     if (chosen.length > 0) {
@@ -360,7 +356,6 @@ async function runAutoConversion(file, log, setProg) {
     throw new Error('Unable to decode audio. Please ensure file is a valid MP3, WAV, MP4, or OGG.');
   }
 
-  // Fast downmix to mono
   const monoBuffer = actx.createBuffer(1, decoded.length, 22050);
   const monoChannel = monoBuffer.getChannelData(0);
   const numChannels = decoded.numberOfChannels;
@@ -378,7 +373,6 @@ async function runAutoConversion(file, log, setProg) {
   log('Audio loaded: ' + durationSec + 's.');
   setProg(15);
 
-  // Enable GPU backend
   if (window.tf) {
     try {
       await tf.setBackend('webgl');
@@ -387,11 +381,11 @@ async function runAutoConversion(file, log, setProg) {
   }
 
   if (!basicPitchInstance) {
-    log('Loading GPU-accelerated Pitch Model...');
+    log('Loading Pitch Neural Network...');
     basicPitchInstance = new BasicPitch(MODEL_URL);
   }
 
-  log('Running Fast AI Neural Network on GPU...');
+  log('Running AI Pitch Detection across full track...');
   const frames = [];
   const onsets = [];
   const contours = [];
@@ -408,25 +402,26 @@ async function runAutoConversion(file, log, setProg) {
     }
   );
 
-  log('Quantizing note delays & tempo...');
+  log('Extracting continuous gapless note stream...');
   setProg(88);
 
+  // Sensitive thresholds to catch quiet verses and subtle notes (no dropped spaces)
   const rawNoteEvents = outputToNotesPoly(
     frames,
     onsets,
-    0.36,
-    0.20,
-    3,
+    0.28,  // Lower onset threshold to capture quieter notes
+    0.16,  // Lower frame threshold to keep sustained notes connected
+    2,     // Shorter min note length (2 frames = ~23ms) so staccatos/triplets aren't dropped
     true,
     null,
     null,
-    true
+    false  // Melodia trick off to prevent suppressing secondary melody lines
   );
 
   const noteEvents = noteFramesToTime(rawNoteEvents);
   setProg(94);
 
-  const { cleanedTicks, bpm, tps } = autoProcessRhythmAndDelays(noteEvents);
+  const { cleanedTicks, bpm, tps } = processGaplessNotes(noteEvents);
 
   let totalHarpNotes = 0;
   const uniqueKeys = new Set();
@@ -440,7 +435,7 @@ async function runAutoConversion(file, log, setProg) {
   setProg(100);
 
   const elapsedTime = ((performance.now() - startTime) / 1000).toFixed(1);
-  log('Done in ' + elapsedTime + 's! (Auto ' + bpm + ' BPM & ' + tps.toFixed(1) + ' TPS)');
+  log('Complete in ' + elapsedTime + 's! Extracted ' + totalHarpNotes + ' continuous notes.');
 
   return {
     bytes,
@@ -504,7 +499,7 @@ convertBtn.addEventListener('click', async () => {
     dlName = s.songName.replace(/[^\w\- ]/g, '_').trim() + '.nbs';
     downloadBtn.style.display = 'block';
     statsEl.innerHTML =
-      '<strong>' + s.notes + '</strong> Harp notes &middot; Processed in <strong>' + s.elapsed + 's</strong><br>' +
+      '<strong>' + s.notes + '</strong> continuous Harp notes &middot; <strong>' + s.elapsed + 's</strong><br>' +
       'Auto Tempo: <strong>' + s.bpm + ' BPM</strong> (' + s.tps + ' TPS) &middot; ' +
       '<strong>' + s.keys + '/25</strong> vanilla Harp keys';
     statsEl.style.display = 'block';
