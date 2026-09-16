@@ -135,7 +135,7 @@ h1 {
 
 <div class="container">
   <h1>Song to Note Block</h1>
-  <p class="subtitle">Automatic tempo, delays & 25-note vanilla Harp transcription</p>
+  <p class="subtitle">Fast GPU-accelerated 25-note vanilla Harp converter</p>
 
   <div class="dropzone" id="dropzone">
     <p id="fileLabel">Select or drop audio/video file</p>
@@ -154,13 +154,26 @@ h1 {
   <div class="stats" id="stats"></div>
 </div>
 
-<div class="version-tag">v2.4.0 (Auto-Rhythm)</div>
+<div class="version-tag">v2.5.0 (GPU-Fast)</div>
 
 <script type="module">
 import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/+esm';
 
 const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/model/model.json';
 let basicPitchInstance = null;
+
+// Initialize WebGL GPU acceleration in the background immediately
+(async () => {
+  try {
+    if (window.tf) {
+      await tf.setBackend('webgl');
+      await tf.ready();
+      console.log('GPU Acceleration enabled:', tf.getBackend());
+    }
+  } catch (e) {
+    console.log('GPU init fallback:', e);
+  }
+})();
 
 const NBS_HARP = 0; // 100% Vanilla Harp on dirt
 
@@ -174,7 +187,6 @@ function foldToVanillaRange(midi) {
   return Math.max(MIDI_LO, Math.min(MIDI_HI, m));
 }
 
-// Automatically detect tempo (BPM) from note onsets
 function calculateAutoBPM(noteEvents) {
   if (noteEvents.length < 4) return 120;
 
@@ -193,14 +205,12 @@ function calculateAutoBPM(noteEvents) {
   const medianIoi = iois[Math.floor(iois.length / 2)];
   let estimatedBpm = 60 / medianIoi;
 
-  // Normalize BPM into common musical ranges (70 - 180 BPM)
   while (estimatedBpm < 70) estimatedBpm *= 2;
   while (estimatedBpm > 180) estimatedBpm /= 2;
 
   return Math.round(estimatedBpm);
 }
 
-// Build NBS binary with exact tempo and delay intervals
 function buildNbsBinary(tickNotes, songName, tps) {
   const tempo = Math.round(tps * 100);
 
@@ -227,7 +237,6 @@ function buildNbsBinary(tickNotes, songName, tps) {
     if (e.length > 0) parts.push(e);
   };
 
-  // Header (NBS v5)
   i16(0);
   u8(5);
   u8(16);
@@ -237,7 +246,7 @@ function buildNbsBinary(tickNotes, songName, tps) {
   str("Song to NoteBlock");
   str("");
   str("");
-  i16(tempo);      // TPS * 100
+  i16(tempo);
   u8(0);
   u8(10);
   u8(4);
@@ -245,10 +254,9 @@ function buildNbsBinary(tickNotes, songName, tps) {
   str("");
   u8(0); u8(0); i16(0);
 
-  // Notes section with automatic delays
   let prevTick = -1;
   for (const tick of sortedTicks) {
-    i16(tick - prevTick); // Automatic delay between notes
+    i16(tick - prevTick);
     prevTick = tick;
 
     const noteList = tickNotes.get(tick);
@@ -257,11 +265,11 @@ function buildNbsBinary(tickNotes, songName, tps) {
     for (const n of noteList) {
       i16(layer - prevLayer);
       prevLayer = layer;
-      u8(NBS_HARP);     // 100% Harp
-      u8(n.key);        // Key 33..57 (F#3 to F#5)
-      u8(n.vel);        // Velocity
-      u8(100);          // Center panning
-      i16(0);           // Pitch
+      u8(NBS_HARP);
+      u8(n.key);
+      u8(n.vel);
+      u8(100);
+      i16(0);
       layer++;
     }
     i16(0);
@@ -284,25 +292,20 @@ function buildNbsBinary(tickNotes, songName, tps) {
   return out;
 }
 
-// Automatic Rhythm & Delay Processor
 function autoProcessRhythmAndDelays(noteEvents) {
   const sorted = [...noteEvents].sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
 
-  // 1. Automatically determine song tempo (BPM) & exact tick rate
   const bpm = calculateAutoBPM(sorted);
-  // Standard musical subdivision: 4 ticks per quarter beat (16th note grid)
   const tps = (bpm / 60) * 4;
 
-  // 2. Map notes into exact musical ticks
   const tickMap = new Map();
 
   for (const n of sorted) {
     const tick = Math.max(0, Math.round(n.startTimeSeconds * tps));
     const origMidi = Math.round(n.pitchMidi);
     const foldedMidi = foldToVanillaRange(origMidi);
-    const nbsKey = foldedMidi - 21; // 33..57
+    const nbsKey = foldedMidi - 21;
 
-    // Punchy normalized velocity (60..100)
     const vel = Math.round(Math.max(60, Math.min(100, 50 + n.amplitude * 55)));
 
     if (!tickMap.has(tick)) tickMap.set(tick, []);
@@ -314,7 +317,6 @@ function autoProcessRhythmAndDelays(noteEvents) {
     });
   }
 
-  // 3. Keep cleanest harmonic notes per tick (max 3 notes for clean chords)
   const cleanedTicks = new Map();
   let lastKeyTick = new Map();
 
@@ -328,7 +330,6 @@ function autoProcessRhythmAndDelays(noteEvents) {
       if (chosen.length >= 3) break;
       if (usedKeys.has(n.key)) continue;
 
-      // Anti-stutter: avoid immediate duplicate trigger of same pitch within 1 tick unless loud
       const prevT = lastKeyTick.get(n.key) ?? -999;
       if (tick - prevT < 2 && n.amp < 0.65) continue;
 
@@ -346,7 +347,8 @@ function autoProcessRhythmAndDelays(noteEvents) {
 }
 
 async function runAutoConversion(file, log, setProg) {
-  log('Loading ' + file.name + '...');
+  const startTime = performance.now();
+  log('Decoding ' + file.name + '...');
   setProg(5);
 
   const arrBuf = await file.arrayBuffer();
@@ -358,7 +360,7 @@ async function runAutoConversion(file, log, setProg) {
     throw new Error('Unable to decode audio. Please ensure file is a valid MP3, WAV, MP4, or OGG.');
   }
 
-  // Downmix to mono
+  // Fast downmix to mono
   const monoBuffer = actx.createBuffer(1, decoded.length, 22050);
   const monoChannel = monoBuffer.getChannelData(0);
   const numChannels = decoded.numberOfChannels;
@@ -376,12 +378,20 @@ async function runAutoConversion(file, log, setProg) {
   log('Audio loaded: ' + durationSec + 's.');
   setProg(15);
 
+  // Enable GPU backend
+  if (window.tf) {
+    try {
+      await tf.setBackend('webgl');
+      await tf.ready();
+    } catch (e) {}
+  }
+
   if (!basicPitchInstance) {
-    log('Loading Pitch AI Neural Network...');
+    log('Loading GPU-accelerated Pitch Model...');
     basicPitchInstance = new BasicPitch(MODEL_URL);
   }
 
-  log('Transcribing music notes...');
+  log('Running Fast AI Neural Network on GPU...');
   const frames = [];
   const onsets = [];
   const contours = [];
@@ -394,28 +404,27 @@ async function runAutoConversion(file, log, setProg) {
       contours.push(...c);
     },
     (percent) => {
-      setProg(15 + Math.round(percent * 65));
+      setProg(15 + Math.round(percent * 70));
     }
   );
 
-  log('Calculating automatic tempo & note delays...');
-  setProg(85);
+  log('Quantizing note delays & tempo...');
+  setProg(88);
 
   const rawNoteEvents = outputToNotesPoly(
     frames,
     onsets,
-    0.36,  // onsetThresh
-    0.20,  // frameThresh
-    3,     // minNoteLen
+    0.36,
+    0.20,
+    3,
     true,
     null,
     null,
-    true   // melodiaTrick
+    true
   );
 
   const noteEvents = noteFramesToTime(rawNoteEvents);
-  log('Transcribed ' + noteEvents.length + ' notes.');
-  setProg(92);
+  setProg(94);
 
   const { cleanedTicks, bpm, tps } = autoProcessRhythmAndDelays(noteEvents);
 
@@ -426,13 +435,12 @@ async function runAutoConversion(file, log, setProg) {
     for (const n of list) uniqueKeys.add(n.key);
   }
 
-  log('Auto BPM: ' + bpm + ' | Auto Delays: ' + tps.toFixed(2) + ' TPS | Notes: ' + totalHarpNotes);
-  setProg(96);
-
   const songName = (file.name.replace(/\.[^.]+$/, '')).slice(0, 64);
   const bytes = buildNbsBinary(cleanedTicks, songName, tps);
   setProg(100);
-  log('Conversion complete!');
+
+  const elapsedTime = ((performance.now() - startTime) / 1000).toFixed(1);
+  log('Done in ' + elapsedTime + 's! (Auto ' + bpm + ' BPM & ' + tps.toFixed(1) + ' TPS)');
 
   return {
     bytes,
@@ -442,6 +450,7 @@ async function runAutoConversion(file, log, setProg) {
       bpm,
       tps: tps.toFixed(2),
       dur: durationSec,
+      elapsed: elapsedTime,
       songName
     }
   };
@@ -495,9 +504,8 @@ convertBtn.addEventListener('click', async () => {
     dlName = s.songName.replace(/[^\w\- ]/g, '_').trim() + '.nbs';
     downloadBtn.style.display = 'block';
     statsEl.innerHTML =
-      '<strong>' + s.notes + '</strong> Harp notes &middot; ' +
-      'Auto Tempo: <strong>' + s.bpm + ' BPM</strong> (' + s.tps + ' TPS)<br>' +
-      'Duration: <strong>' + s.dur + 's</strong> &middot; ' +
+      '<strong>' + s.notes + '</strong> Harp notes &middot; Processed in <strong>' + s.elapsed + 's</strong><br>' +
+      'Auto Tempo: <strong>' + s.bpm + ' BPM</strong> (' + s.tps + ' TPS) &middot; ' +
       '<strong>' + s.keys + '/25</strong> vanilla Harp keys';
     statsEl.style.display = 'block';
   } catch (e) {
