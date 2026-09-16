@@ -11,7 +11,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background: #121212;
   color: #e0e0e0;
-  padding: 30px 20px;
+  padding: 40px 20px;
   display: flex;
   justify-content: center;
   min-height: 100vh;
@@ -21,7 +21,7 @@ body {
   max-width: 460px;
 }
 h1 {
-  font-size: 1.3rem;
+  font-size: 1.35rem;
   font-weight: 600;
   color: #ffffff;
   margin-bottom: 4px;
@@ -34,11 +34,11 @@ h1 {
 .dropzone {
   border: 1px dashed #444444;
   border-radius: 6px;
-  padding: 30px 15px;
+  padding: 36px 18px;
   text-align: center;
   cursor: pointer;
   background: #1a1a1a;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
   transition: border-color 0.15s, background 0.15s;
 }
 .dropzone:hover, .dropzone.dragover {
@@ -46,7 +46,7 @@ h1 {
   background: #222222;
 }
 .dropzone p {
-  font-size: 0.9rem;
+  font-size: 0.95rem;
   color: #cccccc;
   margin-bottom: 4px;
 }
@@ -54,51 +54,25 @@ h1 {
   font-size: 0.75rem;
   color: #777777;
 }
-.grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.field {
-  display: flex;
-  flex-direction: column;
-}
-label {
-  font-size: 0.75rem;
-  color: #888888;
-  margin-bottom: 4px;
-}
-input, select {
-  background: #1a1a1a;
-  border: 1px solid #333333;
-  color: #ffffff;
-  padding: 8px 10px;
-  border-radius: 4px;
-  font-size: 0.85rem;
-  outline: none;
-}
-input:focus, select:focus {
-  border-color: #666666;
-}
 .btn {
   width: 100%;
-  padding: 10px;
+  padding: 12px;
   background: #2a2a2a;
   border: 1px solid #444444;
   color: #ffffff;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
   font-weight: 500;
   border-radius: 4px;
   cursor: pointer;
   margin-bottom: 8px;
+  transition: background 0.15s;
 }
 .btn:hover:not(:disabled) {
   background: #333333;
   border-color: #555555;
 }
 .btn:disabled {
-  opacity: 0.4;
+  opacity: 0.35;
   cursor: not-allowed;
 }
 .btn-dl {
@@ -115,7 +89,7 @@ input:focus, select:focus {
   background: #222222;
   border-radius: 2px;
   overflow: hidden;
-  margin: 12px 0;
+  margin: 14px 0;
   display: none;
 }
 .progress-fill {
@@ -128,9 +102,9 @@ input:focus, select:focus {
   font-family: monospace;
   font-size: 0.75rem;
   color: #777777;
-  max-height: 90px;
+  max-height: 100px;
   overflow-y: auto;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 .stats {
   margin-top: 14px;
@@ -161,48 +135,12 @@ input:focus, select:focus {
 
 <div class="container">
   <h1>Song to Note Block</h1>
-  <p class="subtitle">Convert audio into tight, punchy vanilla Harp note block music</p>
+  <p class="subtitle">Automatic tempo, delays & 25-note vanilla Harp transcription</p>
 
   <div class="dropzone" id="dropzone">
     <p id="fileLabel">Select or drop audio/video file</p>
     <span id="fileSub">MP3, WAV, MP4, OGG, M4A, FLAC</span>
     <input type="file" id="fileInput" accept=".mp3,.wav,.mp4,.ogg,.m4a,.flac,.aac" style="display:none">
-  </div>
-
-  <div class="grid">
-    <div class="field">
-      <label for="speedFactor">Speed & Energy</label>
-      <select id="speedFactor">
-        <option value="1.0" selected>Normal Speed (1.0x)</option>
-        <option value="1.15">Brisk & Energetic (1.15x)</option>
-        <option value="1.25">Fast Pace (1.25x)</option>
-        <option value="1.5">High Speed (1.5x)</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="rhythmMode">Rhythm Tightness</label>
-      <select id="rhythmMode">
-        <option value="smooth" selected>Smooth & Anti-Lag (No Stutter)</option>
-        <option value="sharp">Sharp & Staccato</option>
-        <option value="raw">Raw Unfiltered</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="clarity">Melody Punch</label>
-      <select id="clarity">
-        <option value="punchy" selected>Punchy & Loud (Boosted)</option>
-        <option value="natural">Natural Volume</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="polyphony">Max Notes at Once</label>
-      <select id="polyphony">
-        <option value="3" selected>Up to 3 Harp Notes (Clean)</option>
-        <option value="2">2 Harp Notes (Lead + Bass)</option>
-        <option value="1">1 Harp Note (Solo Melody)</option>
-        <option value="25">Unlimited (All Notes)</option>
-      </select>
-    </div>
   </div>
 
   <button class="btn" id="convertBtn" disabled>Convert to .NBS</button>
@@ -216,7 +154,7 @@ input:focus, select:focus {
   <div class="stats" id="stats"></div>
 </div>
 
-<div class="version-tag">v2.3.0</div>
+<div class="version-tag">v2.4.0 (Auto-Rhythm)</div>
 
 <script type="module">
 import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/+esm';
@@ -224,7 +162,7 @@ import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsd
 const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/model/model.json';
 let basicPitchInstance = null;
 
-const NBS_HARP = 0; // 100% Harp only
+const NBS_HARP = 0; // 100% Vanilla Harp on dirt
 
 const MIDI_LO = 54; // F#3
 const MIDI_HI = 78; // F#5
@@ -236,13 +174,40 @@ function foldToVanillaRange(midi) {
   return Math.max(MIDI_LO, Math.min(MIDI_HI, m));
 }
 
+// Automatically detect tempo (BPM) from note onsets
+function calculateAutoBPM(noteEvents) {
+  if (noteEvents.length < 4) return 120;
+
+  const onsets = [...new Set(noteEvents.map(e => Math.round(e.startTimeSeconds * 1000)))].sort((a, b) => a - b);
+  const iois = [];
+  for (let i = 1; i < onsets.length; i++) {
+    const diff = (onsets[i] - onsets[i - 1]) / 1000;
+    if (diff > 0.08 && diff < 1.8) {
+      iois.push(diff);
+    }
+  }
+
+  if (iois.length < 3) return 120;
+
+  iois.sort((a, b) => a - b);
+  const medianIoi = iois[Math.floor(iois.length / 2)];
+  let estimatedBpm = 60 / medianIoi;
+
+  // Normalize BPM into common musical ranges (70 - 180 BPM)
+  while (estimatedBpm < 70) estimatedBpm *= 2;
+  while (estimatedBpm > 180) estimatedBpm /= 2;
+
+  return Math.round(estimatedBpm);
+}
+
+// Build NBS binary with exact tempo and delay intervals
 function buildNbsBinary(tickNotes, songName, tps) {
   const tempo = Math.round(tps * 100);
 
   const sortedTicks = [...tickNotes.keys()].sort((a, b) => a - b);
   if (!sortedTicks.length) {
     sortedTicks.push(0);
-    tickNotes.set(0, [{ inst: NBS_HARP, key: 33, vel: 100 }]);
+    tickNotes.set(0, [{ key: 33, vel: 100 }]);
   }
 
   const songLen = sortedTicks[sortedTicks.length - 1];
@@ -263,9 +228,9 @@ function buildNbsBinary(tickNotes, songName, tps) {
   };
 
   // Header (NBS v5)
-  i16(0);          // New-format flag
-  u8(5);           // NBS version 5
-  u8(16);          // 16 vanilla instruments
+  i16(0);
+  u8(5);
+  u8(16);
   i16(songLen);
   i16(maxLayers);
   str(songName);
@@ -273,17 +238,17 @@ function buildNbsBinary(tickNotes, songName, tps) {
   str("");
   str("");
   i16(tempo);      // TPS * 100
-  u8(0);           // auto-save off
-  u8(10);          // auto-save duration
-  u8(4);           // time signature 4/4
+  u8(0);
+  u8(10);
+  u8(4);
   i32(0); i32(0); i32(0); i32(0); i32(0);
   str("");
   u8(0); u8(0); i16(0);
 
-  // Notes section - ALL NOTES ARE HARP (inst: 0)
+  // Notes section with automatic delays
   let prevTick = -1;
   for (const tick of sortedTicks) {
-    i16(tick - prevTick);
+    i16(tick - prevTick); // Automatic delay between notes
     prevTick = tick;
 
     const noteList = tickNotes.get(tick);
@@ -292,26 +257,24 @@ function buildNbsBinary(tickNotes, songName, tps) {
     for (const n of noteList) {
       i16(layer - prevLayer);
       prevLayer = layer;
-      u8(NBS_HARP);     // 100% Harp only
-      u8(n.key);        // Key (33..57 vanilla 25 notes)
-      u8(n.vel);        // Velocity (0..100)
+      u8(NBS_HARP);     // 100% Harp
+      u8(n.key);        // Key 33..57 (F#3 to F#5)
+      u8(n.vel);        // Velocity
       u8(100);          // Center panning
-      i16(0);           // Pitch bend
+      i16(0);           // Pitch
       layer++;
     }
     i16(0);
   }
   i16(0);
 
-  // Layers section
   for (let i = 0; i < maxLayers; i++) {
     str("Layer " + (i + 1));
-    u8(0);   // lock = false
-    u8(100); // volume
-    u8(100); // panning
+    u8(0);
+    u8(100);
+    u8(100);
   }
 
-  // Custom instruments count (0)
   u8(0);
 
   const total = parts.reduce((s, p) => s + p.length, 0);
@@ -321,43 +284,26 @@ function buildNbsBinary(tickNotes, songName, tps) {
   return out;
 }
 
-// Anti-Stutter & Rhythm Tightening Pipeline
-function processCleanRhythm(noteEvents, polyphonyLimit, tps, speedFactor, rhythmMode, clarity) {
-  // Sort notes by start time
+// Automatic Rhythm & Delay Processor
+function autoProcessRhythmAndDelays(noteEvents) {
   const sorted = [...noteEvents].sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
 
-  // 1. Merge micro-stutters: if the exact same note starts within 70ms of previous note end, merge it
-  const mergedNotes = [];
-  for (const n of sorted) {
-    const prev = mergedNotes[mergedNotes.length - 1];
-    if (prev && prev.pitchMidi === n.pitchMidi && (n.startTimeSeconds - (prev.startTimeSeconds + prev.durationSeconds) < 0.07)) {
-      // Extend previous note duration instead of stutter-hitting
-      prev.durationSeconds = (n.startTimeSeconds + n.durationSeconds) - prev.startTimeSeconds;
-      prev.amplitude = Math.max(prev.amplitude, n.amplitude);
-    } else {
-      mergedNotes.push({ ...n });
-    }
-  }
+  // 1. Automatically determine song tempo (BPM) & exact tick rate
+  const bpm = calculateAutoBPM(sorted);
+  // Standard musical subdivision: 4 ticks per quarter beat (16th note grid)
+  const tps = (bpm / 60) * 4;
 
-  // 2. Map into smooth ticks
+  // 2. Map notes into exact musical ticks
   const tickMap = new Map();
 
-  for (const n of mergedNotes) {
-    // Apply speed factor to compress time (makes playback faster/tighter)
-    const adjustedTime = n.startTimeSeconds / speedFactor;
-    const tick = Math.max(0, Math.round(adjustedTime * tps));
-
+  for (const n of sorted) {
+    const tick = Math.max(0, Math.round(n.startTimeSeconds * tps));
     const origMidi = Math.round(n.pitchMidi);
     const foldedMidi = foldToVanillaRange(origMidi);
     const nbsKey = foldedMidi - 21; // 33..57
 
-    // Punchy velocity boosting for clear audibility
-    let vel = Math.round(n.amplitude * 125);
-    if (clarity === 'punchy') {
-      vel = Math.max(55, Math.min(100, Math.round(50 + n.amplitude * 55))); // Boosted 55-100 range
-    } else {
-      vel = Math.max(30, Math.min(100, vel));
-    }
+    // Punchy normalized velocity (60..100)
+    const vel = Math.round(Math.max(60, Math.min(100, 50 + n.amplitude * 55)));
 
     if (!tickMap.has(tick)) tickMap.set(tick, []);
     tickMap.get(tick).push({
@@ -368,26 +314,23 @@ function processCleanRhythm(noteEvents, polyphonyLimit, tps, speedFactor, rhythm
     });
   }
 
-  // 3. Clean and de-clutter each tick
+  // 3. Keep cleanest harmonic notes per tick (max 3 notes for clean chords)
   const cleanedTicks = new Map();
   let lastKeyTick = new Map();
 
   for (const [tick, notes] of tickMap) {
-    // Sort by amplitude descending (loudest main melody first)
     notes.sort((a, b) => b.amp - a.amp);
 
     const chosen = [];
     const usedKeys = new Set();
 
     for (const n of notes) {
-      if (chosen.length >= polyphonyLimit) break;
+      if (chosen.length >= 3) break;
       if (usedKeys.has(n.key)) continue;
 
-      if (rhythmMode === 'smooth') {
-        // Prevent machine-gun jitter of the exact same key within 1 tick
-        const prevT = lastKeyTick.get(n.key) ?? -999;
-        if (tick - prevT < 2 && n.amp < 0.6) continue;
-      }
+      // Anti-stutter: avoid immediate duplicate trigger of same pitch within 1 tick unless loud
+      const prevT = lastKeyTick.get(n.key) ?? -999;
+      if (tick - prevT < 2 && n.amp < 0.65) continue;
 
       chosen.push(n);
       usedKeys.add(n.key);
@@ -399,10 +342,10 @@ function processCleanRhythm(noteEvents, polyphonyLimit, tps, speedFactor, rhythm
     }
   }
 
-  return cleanedTicks;
+  return { cleanedTicks, bpm, tps };
 }
 
-async function runConversion(file, opts, log, setProg) {
+async function runAutoConversion(file, log, setProg) {
   log('Loading ' + file.name + '...');
   setProg(5);
 
@@ -412,10 +355,10 @@ async function runConversion(file, opts, log, setProg) {
   try {
     decoded = await actx.decodeAudioData(arrBuf);
   } catch (e) {
-    throw new Error('Could not decode audio. Please ensure file is an MP3, WAV, MP4, or OGG.');
+    throw new Error('Unable to decode audio. Please ensure file is a valid MP3, WAV, MP4, or OGG.');
   }
 
-  // Downmix to mono AudioBuffer
+  // Downmix to mono
   const monoBuffer = actx.createBuffer(1, decoded.length, 22050);
   const monoChannel = monoBuffer.getChannelData(0);
   const numChannels = decoded.numberOfChannels;
@@ -434,11 +377,11 @@ async function runConversion(file, opts, log, setProg) {
   setProg(15);
 
   if (!basicPitchInstance) {
-    log('Loading Spotify AI Pitch Model...');
+    log('Loading Pitch AI Neural Network...');
     basicPitchInstance = new BasicPitch(MODEL_URL);
   }
 
-  log('Running AI Transcription...');
+  log('Transcribing music notes...');
   const frames = [];
   const onsets = [];
   const contours = [];
@@ -455,61 +398,50 @@ async function runConversion(file, opts, log, setProg) {
     }
   );
 
-  log('Tightening rhythm & melody lines...');
+  log('Calculating automatic tempo & note delays...');
   setProg(85);
 
-  // Optimized thresholds for tight melody capture
   const rawNoteEvents = outputToNotesPoly(
     frames,
     onsets,
-    0.38,  // onsetThresh
-    0.22,  // frameThresh
+    0.36,  // onsetThresh
+    0.20,  // frameThresh
     3,     // minNoteLen
     true,
     null,
     null,
-    true   // melodiaTrick for extracting clean lead melody
+    true   // melodiaTrick
   );
 
   const noteEvents = noteFramesToTime(rawNoteEvents);
-  log('Transcribed ' + noteEvents.length + ' melodic notes.');
+  log('Transcribed ' + noteEvents.length + ' notes.');
   setProg(92);
 
-  const tps = 20; // 20 TPS base clock
-  const speedFactor = parseFloat(opts.speedFactor) || 1.0;
-  const polyphonyLimit = parseInt(opts.polyphony) || 3;
-
-  const harpTicks = processCleanRhythm(
-    noteEvents,
-    polyphonyLimit,
-    tps,
-    speedFactor,
-    opts.rhythmMode,
-    opts.clarity
-  );
+  const { cleanedTicks, bpm, tps } = autoProcessRhythmAndDelays(noteEvents);
 
   let totalHarpNotes = 0;
   const uniqueKeys = new Set();
-  for (const [t, list] of harpTicks) {
+  for (const [t, list] of cleanedTicks) {
     totalHarpNotes += list.length;
     for (const n of list) uniqueKeys.add(n.key);
   }
 
-  log('Smoothed into ' + totalHarpNotes + ' punchy notes at ' + speedFactor + 'x speed.');
+  log('Auto BPM: ' + bpm + ' | Auto Delays: ' + tps.toFixed(2) + ' TPS | Notes: ' + totalHarpNotes);
   setProg(96);
 
   const songName = (file.name.replace(/\.[^.]+$/, '')).slice(0, 64);
-  const bytes = buildNbsBinary(harpTicks, songName, tps);
+  const bytes = buildNbsBinary(cleanedTicks, songName, tps);
   setProg(100);
-  log('Ready to download!');
+  log('Conversion complete!');
 
   return {
     bytes,
     stats: {
       notes: totalHarpNotes,
       keys: uniqueKeys.size,
-      speed: speedFactor + 'x',
-      dur: (durationSec / speedFactor).toFixed(1),
+      bpm,
+      tps: tps.toFixed(2),
+      dur: durationSec,
       songName
     }
   };
@@ -556,24 +488,17 @@ convertBtn.addEventListener('click', async () => {
   progressFill.style.width = '0%';
   logEl.innerHTML = '';
 
-  const opts = {
-    speedFactor: document.getElementById('speedFactor').value,
-    rhythmMode:  document.getElementById('rhythmMode').value,
-    clarity:     document.getElementById('clarity').value,
-    polyphony:   document.getElementById('polyphony').value,
-  };
-
   try {
-    const result = await runConversion(curFile, opts, addLog, p => { progressFill.style.width = p + '%'; });
+    const result = await runAutoConversion(curFile, addLog, p => { progressFill.style.width = p + '%'; });
     const s = result.stats;
     dlBlob = new Blob([result.bytes], { type: 'application/octet-stream' });
     dlName = s.songName.replace(/[^\w\- ]/g, '_').trim() + '.nbs';
     downloadBtn.style.display = 'block';
     statsEl.innerHTML =
-      '<strong>' + s.notes + '</strong> punchy Harp notes &middot; ' +
-      'Speed: <strong>' + s.speed + '</strong><br>' +
-      'Effective Duration: <strong>' + s.dur + 's</strong> &middot; ' +
-      '<strong>' + s.keys + '/25</strong> vanilla Harp notes';
+      '<strong>' + s.notes + '</strong> Harp notes &middot; ' +
+      'Auto Tempo: <strong>' + s.bpm + ' BPM</strong> (' + s.tps + ' TPS)<br>' +
+      'Duration: <strong>' + s.dur + 's</strong> &middot; ' +
+      '<strong>' + s.keys + '/25</strong> vanilla Harp keys';
     statsEl.style.display = 'block';
   } catch (e) {
     addLog('Error: ' + e.message);
