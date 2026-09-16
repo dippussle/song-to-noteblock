@@ -134,7 +134,7 @@ h1 {
 
 <div class="container">
   <h1>Song to Note Block</h1>
-  <p class="subtitle">Convert audio into clean vanilla Harp note block melody</p>
+  <p class="subtitle">Convert audio into full 88-note Harp piano music (.nbs)</p>
 
   <div class="dropzone" id="dropzone">
     <p id="fileLabel">Select or drop audio/video file</p>
@@ -153,7 +153,7 @@ h1 {
   <div class="stats" id="stats"></div>
 </div>
 
-<div class="version-tag">v4.0.0 (Pure Melody)</div>
+<div class="version-tag">v5.0.0 (Full 88 Harp)</div>
 
 <script type="module">
 import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/+esm';
@@ -161,18 +161,13 @@ import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsd
 const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/model/model.json';
 let basicPitchInstance = null;
 
-const NBS_HARP = 0; // 100% Vanilla Harp on dirt
+const NBS_HARP = 0; // 100% Harp instrument
 const TPS = 20;     // Exact 20.00 TPS real-time clock (1 tick = 50ms)
 
-// Vanilla 25-note range: F#3 to F#5 (MIDI 54 to 78) -> NBS keys 33 to 57
-const MIDI_LO = 54;
-const MIDI_HI = 78;
-
-function foldToVanillaRange(midi) {
-  let m = midi;
-  while (m < MIDI_LO) m += 12;
-  while (m > MIDI_HI) m -= 12;
-  return Math.max(MIDI_LO, Math.min(MIDI_HI, m));
+// Full 88 piano keys: MIDI 21 (A0) to MIDI 108 (C8) -> NBS keys 0 to 87
+// No octave folding! Every note plays in its true, natural pitch!
+function midiToNbsKey(midi) {
+  return Math.max(0, Math.min(87, Math.round(midi) - 21));
 }
 
 function buildNbsBinary(tickNotes, songName) {
@@ -211,7 +206,7 @@ function buildNbsBinary(tickNotes, songName) {
   str("Song to NoteBlock");
   str("");
   str("");
-  i16(tempo);      // 2000 = 20.00 TPS
+  i16(tempo);      // 2000 = 20.00 TPS real-time
   u8(0);           // auto-save off
   u8(10);          // auto-save duration
   u8(4);           // time signature 4/4
@@ -219,7 +214,7 @@ function buildNbsBinary(tickNotes, songName) {
   str("");
   u8(0); u8(0); i16(0);
 
-  // Notes section - ALL NOTES ARE HARP (inst: 0)
+  // Notes section - ALL NOTES ARE HARP across the full 88 piano keys (0..87)
   let prevTick = -1;
   for (const tick of sortedTicks) {
     i16(tick - prevTick);
@@ -232,7 +227,7 @@ function buildNbsBinary(tickNotes, songName) {
       i16(layer - prevLayer);
       prevLayer = layer;
       u8(NBS_HARP);     // 100% Harp
-      u8(n.key);        // Key (33..57 vanilla 25 notes)
+      u8(n.key);        // Key (0..87 full 88-key piano)
       u8(n.vel);        // Velocity (0..100)
       u8(100);          // Center panning
       i16(0);           // Pitch bend
@@ -258,57 +253,44 @@ function buildNbsBinary(tickNotes, songName) {
   return out;
 }
 
-// Pure Musical Melody Extraction:
-// - Zero pedal spam: every real note is struck ONCE cleanly
-// - Filters out drum and background noise
-// - Max 2 clean notes per beat (Lead Melody + Bass Root) so 25-note Harp never sounds like a chaotic mess
-function extractCleanMelody(noteEvents) {
-  // Sort notes chronologically
+// 88-Key Music Processing:
+// Allows full piano chords and rich polyphony with zero octave distortion
+function process88KeyNotes(noteEvents) {
   const sorted = [...noteEvents].sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
 
   const rawTickMap = new Map();
 
   for (const n of sorted) {
-    // Quantize note start to 20 TPS grid
     const tick = Math.max(0, Math.round(n.startTimeSeconds * TPS));
-    const origMidi = Math.round(n.pitchMidi);
-    const foldedMidi = foldToVanillaRange(origMidi);
-    const nbsKey = foldedMidi - 21; // 33..57
+    const nbsKey = midiToNbsKey(n.pitchMidi); // 0 to 87 true pitch!
 
-    // Clear, punchy velocity
-    const vel = Math.round(Math.max(65, Math.min(100, 55 + n.amplitude * 50)));
+    // Clear dynamic velocity
+    const vel = Math.round(Math.max(60, Math.min(100, 50 + n.amplitude * 55)));
 
     if (!rawTickMap.has(tick)) rawTickMap.set(tick, []);
     rawTickMap.get(tick).push({
       key: nbsKey,
       vel,
       amp: n.amplitude,
-      origMidi
+      origMidi: n.pitchMidi
     });
   }
 
-  // Filter each tick: keep the loudest lead melody note + optional bass root
+  // Allow rich chords across 88 keys (up to 5 simultaneous notes per tick)
   const cleanedTicks = new Map();
-  let lastPlayedTick = new Map();
 
   for (const [tick, notes] of rawTickMap) {
-    // Sort by amplitude descending (loudest main melody note first)
     notes.sort((a, b) => b.amp - a.amp);
 
     const chosen = [];
     const usedKeys = new Set();
 
     for (const n of notes) {
-      if (chosen.length >= 2) break; // Maximum 2 notes per tick (prevents muddy chord clashing)
+      if (chosen.length >= 5) break; // Rich chords across bass, mid, lead
       if (usedKeys.has(n.key)) continue;
-
-      // Prevent glitch re-triggering of exact same key on immediate consecutive tick
-      const lastT = lastPlayedTick.get(n.key) ?? -999;
-      if (tick - lastT < 2 && n.amp < 0.60) continue;
 
       chosen.push(n);
       usedKeys.add(n.key);
-      lastPlayedTick.set(n.key, tick);
     }
 
     if (chosen.length > 0) {
@@ -347,7 +329,7 @@ function setFile(f) {
   document.getElementById('fileLabel').textContent = f.name;
   document.getElementById('fileSub').textContent = (f.size / 1024 / 1024).toFixed(2) + ' MB';
   convertBtn.disabled = false;
-  addLog('Loaded file: ' + f.name);
+  addLog('Selected: ' + f.name);
 }
 
 dropzone.addEventListener('click',     ()  => fileInput.click());
@@ -410,27 +392,26 @@ async function runAutoConversion(file, setProg) {
     }
   );
 
-  addLog('Extracting pure lead melody line...');
+  addLog('Extracting full 88-key piano harmonies...');
   setProg(88);
 
-  // Use optimal Spotify thresholds for clean lead melody
   const rawNoteEvents = outputToNotesPoly(
     frames,
     onsets,
-    0.40,  // Clean onset threshold filters out drum hits and background static
-    0.25,  // Frame threshold ensures notes sustain naturally without clutter
-    4,     // Min note length (~45ms) avoids phantom click noise
+    0.35,  // Clean onset threshold
+    0.20,  // Frame threshold
+    3,     // Min note length
     true,
     null,
     null,
-    true   // Melodia algorithm focuses directly on the singing / lead melody
+    true
   );
 
   const noteEvents = noteFramesToTime(rawNoteEvents);
-  addLog('Identified ' + noteEvents.length + ' melodic notes.');
+  addLog('Transcribed ' + noteEvents.length + ' notes across all 88 keys.');
   setProg(94);
 
-  const tickNotes = extractCleanMelody(noteEvents);
+  const tickNotes = process88KeyNotes(noteEvents);
 
   let totalHarpNotes = 0;
   const uniqueKeys = new Set();
@@ -444,7 +425,7 @@ async function runAutoConversion(file, setProg) {
   setProg(100);
 
   const elapsedTime = ((performance.now() - startTime) / 1000).toFixed(1);
-  addLog('Done in ' + elapsedTime + 's! Clean melody ready @ 20.00 TPS.');
+  addLog('Done in ' + elapsedTime + 's! 88-key piano ready @ 20.00 TPS.');
 
   return {
     bytes,
@@ -474,9 +455,9 @@ convertBtn.addEventListener('click', async () => {
     dlName = s.songName.replace(/[^\w\- ]/g, '_').trim() + '.nbs';
     downloadBtn.style.display = 'block';
     statsEl.innerHTML =
-      '<strong>' + s.notes + '</strong> clean Harp melody notes &middot; <strong>' + s.elapsed + 's</strong><br>' +
+      '<strong>' + s.notes + '</strong> Harp notes &middot; <strong>' + s.elapsed + 's</strong> processing<br>' +
       'Duration: <strong>' + s.dur + 's</strong> (1:1 Real-Time Speed @ 20.00 TPS)<br>' +
-      '<strong>' + s.keys + '/25</strong> vanilla Harp keys used';
+      'Pitch Range: <strong>' + s.keys + '/88</strong> full piano keys (A0 to C8)';
     statsEl.style.display = 'block';
   } catch (e) {
     addLog('Error: ' + e.message);
