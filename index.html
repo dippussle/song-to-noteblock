@@ -135,7 +135,7 @@ h1 {
 
 <div class="container">
   <h1>Song to Note Block</h1>
-  <p class="subtitle">Continuous gapless 25-note vanilla Harp converter</p>
+  <p class="subtitle">1:1 Real-time speed & continuous 25-note vanilla Harp music</p>
 
   <div class="dropzone" id="dropzone">
     <p id="fileLabel">Select or drop audio/video file</p>
@@ -154,10 +154,10 @@ h1 {
   <div class="stats" id="stats"></div>
 </div>
 
-<div class="version-tag">v2.6.0 (Gapless)</div>
+<div class="version-tag">v3.0.0 (Real-Time 20TPS)</div>
 
 <script type="module">
-import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/+esm';
+import { BasicPitch } from 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/+esm';
 
 const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/model/model.json';
 let basicPitchInstance = null;
@@ -174,8 +174,12 @@ let basicPitchInstance = null;
 
 const NBS_HARP = 0; // 100% Vanilla Harp on dirt
 
-const MIDI_LO = 54; // F#3
-const MIDI_HI = 78; // F#5
+// Standard 20 TPS Minecraft clock (1 tick = 50ms = 0.050s)
+const TPS = 20;
+
+// Vanilla 25-note range: F#3 to F#5 (MIDI 54 to 78) -> NBS keys 33 to 57
+const MIDI_LO = 54;
+const MIDI_HI = 78;
 
 function foldToVanillaRange(midi) {
   let m = midi;
@@ -184,32 +188,8 @@ function foldToVanillaRange(midi) {
   return Math.max(MIDI_LO, Math.min(MIDI_HI, m));
 }
 
-function calculateAutoBPM(noteEvents) {
-  if (noteEvents.length < 4) return 120;
-
-  const onsets = [...new Set(noteEvents.map(e => Math.round(e.startTimeSeconds * 1000)))].sort((a, b) => a - b);
-  const iois = [];
-  for (let i = 1; i < onsets.length; i++) {
-    const diff = (onsets[i] - onsets[i - 1]) / 1000;
-    if (diff > 0.06 && diff < 1.8) {
-      iois.push(diff);
-    }
-  }
-
-  if (iois.length < 3) return 120;
-
-  iois.sort((a, b) => a - b);
-  const medianIoi = iois[Math.floor(iois.length / 2)];
-  let estimatedBpm = 60 / medianIoi;
-
-  while (estimatedBpm < 70) estimatedBpm *= 2;
-  while (estimatedBpm > 180) estimatedBpm /= 2;
-
-  return Math.round(estimatedBpm);
-}
-
-function buildNbsBinary(tickNotes, songName, tps) {
-  const tempo = Math.round(tps * 100);
+function buildNbsBinary(tickNotes, songName) {
+  const tempo = TPS * 100; // Exact 2000 = 20.00 TPS
 
   const sortedTicks = [...tickNotes.keys()].sort((a, b) => a - b);
   if (!sortedTicks.length) {
@@ -234,23 +214,25 @@ function buildNbsBinary(tickNotes, songName, tps) {
     if (e.length > 0) parts.push(e);
   };
 
-  i16(0);
-  u8(5);
-  u8(16);
+  // Header (NBS v5)
+  i16(0);          // New-format flag
+  u8(5);           // NBS version 5
+  u8(16);          // 16 vanilla instruments
   i16(songLen);
   i16(maxLayers);
   str(songName);
   str("Song to NoteBlock");
   str("");
   str("");
-  i16(tempo);
-  u8(0);
-  u8(10);
-  u8(4);
+  i16(tempo);      // 2000 = exactly 20.00 TPS real-time
+  u8(0);           // auto-save off
+  u8(10);          // auto-save duration
+  u8(4);           // time signature 4/4
   i32(0); i32(0); i32(0); i32(0); i32(0);
   str("");
   u8(0); u8(0); i16(0);
 
+  // Notes section
   let prevTick = -1;
   for (const tick of sortedTicks) {
     i16(tick - prevTick);
@@ -262,11 +244,11 @@ function buildNbsBinary(tickNotes, songName, tps) {
     for (const n of noteList) {
       i16(layer - prevLayer);
       prevLayer = layer;
-      u8(NBS_HARP);
-      u8(n.key);
-      u8(n.vel);
-      u8(100);
-      i16(0);
+      u8(NBS_HARP);     // 100% Harp
+      u8(n.key);        // Key (33..57 vanilla 25 notes)
+      u8(n.vel);        // Velocity (0..100)
+      u8(100);          // Center panning
+      i16(0);           // Pitch bend
       layer++;
     }
     i16(0);
@@ -275,9 +257,9 @@ function buildNbsBinary(tickNotes, songName, tps) {
 
   for (let i = 0; i < maxLayers; i++) {
     str("Layer " + (i + 1));
-    u8(0);
-    u8(100);
-    u8(100);
+    u8(0);   // lock = false
+    u8(100); // volume
+    u8(100); // panning
   }
 
   u8(0);
@@ -289,57 +271,82 @@ function buildNbsBinary(tickNotes, songName, tps) {
   return out;
 }
 
-// Gapless Continuous Note Processor:
-// Ensures no melody dropouts, soft verses or transitional gaps are missed
-function processGaplessNotes(noteEvents) {
-  const sorted = [...noteEvents].sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
+// Frame-Level Real-Time Continuous Music Extraction
+// Maps every frame directly to exact 20 TPS Minecraft ticks without gaps or slowdowns
+function extractRealtimeHarpNotes(frames, onsets, totalSeconds) {
+  // Basic Pitch frame step: hop size is 256 samples @ 22050 Hz = ~0.01161 seconds per AI frame
+  const frameDurationSec = 256 / 22050; // ~11.6ms
+  const totalTicks = Math.ceil(totalSeconds * TPS); // 20 ticks per second
 
-  const bpm = calculateAutoBPM(sorted);
-  const tps = (bpm / 60) * 4;
+  const tickNotes = new Map();
+  let prevPlayedKeys = new Set();
+  let lastKeyTriggerTick = new Map();
 
-  const tickMap = new Map();
+  for (let t = 0; t < totalTicks; t++) {
+    const timeSec = t / TPS; // Exact second for this tick (0.00, 0.05, 0.10, 0.15...)
+    const frameIndex = Math.min(frames.length - 1, Math.round(timeSec / frameDurationSec));
 
-  for (const n of sorted) {
-    const tick = Math.max(0, Math.round(n.startTimeSeconds * tps));
-    const origMidi = Math.round(n.pitchMidi);
-    const foldedMidi = foldToVanillaRange(origMidi);
-    const nbsKey = foldedMidi - 21; // 33..57
+    if (frameIndex < 0 || frameIndex >= frames.length) continue;
 
-    // Clear dynamic velocity (50..100)
-    const vel = Math.round(Math.max(50, Math.min(100, 45 + n.amplitude * 60)));
+    const frameProbs = frames[frameIndex];
+    const onsetProbs = onsets[frameIndex];
 
-    if (!tickMap.has(tick)) tickMap.set(tick, []);
-    tickMap.get(tick).push({
-      key: nbsKey,
-      vel,
-      amp: n.amplitude,
-      origMidi
-    });
-  }
+    // Gather active candidate pitches at this moment
+    const candidates = [];
 
-  // Preserve all musical notes without dropping quiet sections
-  const cleanedTicks = new Map();
+    for (let p = 0; p < 88; p++) {
+      const midi = p + 21; // MIDI note 21..108
+      const frameVal = frameProbs[p];
+      const onsetVal = onsetProbs ? onsetProbs[p] : 0;
 
-  for (const [tick, notes] of tickMap) {
-    notes.sort((a, b) => b.amp - a.amp);
+      // Combined musical score: frame presence + onset attack
+      const score = frameVal * 0.7 + onsetVal * 0.3;
 
-    const chosen = [];
-    const usedKeys = new Set();
-
-    for (const n of notes) {
-      if (chosen.length >= 4) break; // Allow up to 4 simultaneous notes so harmonies aren't dropped
-      if (usedKeys.has(n.key)) continue; // Deduplicate same pitch on same tick
-
-      chosen.push(n);
-      usedKeys.add(n.key);
+      if (score >= 0.18) { // Sensitive threshold ensures no quiet notes or gaps are lost
+        candidates.push({ midi, score, onset: onsetVal });
+      }
     }
 
-    if (chosen.length > 0) {
-      cleanedTicks.set(tick, chosen);
+    if (!candidates.length) {
+      prevPlayedKeys.clear();
+      continue;
+    }
+
+    // Sort candidates by score descending
+    candidates.sort((a, b) => b.score - a.score);
+
+    const tickNotesList = [];
+    const usedKeysInTick = new Set();
+
+    for (const cand of candidates) {
+      if (tickNotesList.length >= 3) break; // Keep up to 3 harmonious notes per tick
+
+      const foldedMidi = foldToVanillaRange(cand.midi);
+      const nbsKey = foldedMidi - 21; // 33..57
+
+      if (usedKeysInTick.has(nbsKey)) continue;
+
+      const lastTick = lastKeyTriggerTick.get(nbsKey) ?? -999;
+      const isNewOnset = cand.onset > 0.25;
+
+      // Trigger if: it's a new note onset, or at least 2 ticks have passed, or note wasn't in previous tick
+      if (isNewOnset || t - lastTick >= 2 || !prevPlayedKeys.has(nbsKey)) {
+        const vel = Math.round(Math.max(55, Math.min(100, 45 + cand.score * 60)));
+        tickNotesList.push({ key: nbsKey, vel });
+        usedKeysInTick.add(nbsKey);
+        lastKeyTriggerTick.set(nbsKey, t);
+      }
+    }
+
+    if (tickNotesList.length > 0) {
+      tickNotes.set(t, tickNotesList);
+      prevPlayedKeys = new Set(tickNotesList.map(n => n.key));
+    } else {
+      prevPlayedKeys.clear();
     }
   }
 
-  return { cleanedTicks, bpm, tps };
+  return tickNotes;
 }
 
 async function runAutoConversion(file, log, setProg) {
@@ -369,8 +376,8 @@ async function runAutoConversion(file, log, setProg) {
   }
   await actx.close();
 
-  const durationSec = monoBuffer.duration.toFixed(1);
-  log('Audio loaded: ' + durationSec + 's.');
+  const durationSec = monoBuffer.duration;
+  log('Audio loaded: ' + durationSec.toFixed(1) + 's.');
   setProg(15);
 
   if (window.tf) {
@@ -381,11 +388,11 @@ async function runAutoConversion(file, log, setProg) {
   }
 
   if (!basicPitchInstance) {
-    log('Loading Pitch Neural Network...');
+    log('Loading AI Pitch Neural Network...');
     basicPitchInstance = new BasicPitch(MODEL_URL);
   }
 
-  log('Running AI Pitch Detection across full track...');
+  log('Running Full AI Neural Network...');
   const frames = [];
   const onsets = [];
   const contours = [];
@@ -402,49 +409,31 @@ async function runAutoConversion(file, log, setProg) {
     }
   );
 
-  log('Extracting continuous gapless note stream...');
+  log('Mapping continuous real-time notes at 20.00 TPS (Zero slowdowns & zero gaps)...');
   setProg(88);
 
-  // Sensitive thresholds to catch quiet verses and subtle notes (no dropped spaces)
-  const rawNoteEvents = outputToNotesPoly(
-    frames,
-    onsets,
-    0.28,  // Lower onset threshold to capture quieter notes
-    0.16,  // Lower frame threshold to keep sustained notes connected
-    2,     // Shorter min note length (2 frames = ~23ms) so staccatos/triplets aren't dropped
-    true,
-    null,
-    null,
-    false  // Melodia trick off to prevent suppressing secondary melody lines
-  );
-
-  const noteEvents = noteFramesToTime(rawNoteEvents);
-  setProg(94);
-
-  const { cleanedTicks, bpm, tps } = processGaplessNotes(noteEvents);
+  const tickNotes = extractRealtimeHarpNotes(frames, onsets, durationSec);
 
   let totalHarpNotes = 0;
   const uniqueKeys = new Set();
-  for (const [t, list] of cleanedTicks) {
+  for (const [t, list] of tickNotes) {
     totalHarpNotes += list.length;
     for (const n of list) uniqueKeys.add(n.key);
   }
 
   const songName = (file.name.replace(/\.[^.]+$/, '')).slice(0, 64);
-  const bytes = buildNbsBinary(cleanedTicks, songName, tps);
+  const bytes = buildNbsBinary(tickNotes, songName);
   setProg(100);
 
   const elapsedTime = ((performance.now() - startTime) / 1000).toFixed(1);
-  log('Complete in ' + elapsedTime + 's! Extracted ' + totalHarpNotes + ' continuous notes.');
+  log('Done in ' + elapsedTime + 's! Exactly 1:1 real-time speed (' + durationSec.toFixed(1) + 's audio).');
 
   return {
     bytes,
     stats: {
       notes: totalHarpNotes,
       keys: uniqueKeys.size,
-      bpm,
-      tps: tps.toFixed(2),
-      dur: durationSec,
+      dur: durationSec.toFixed(1),
       elapsed: elapsedTime,
       songName
     }
@@ -499,9 +488,9 @@ convertBtn.addEventListener('click', async () => {
     dlName = s.songName.replace(/[^\w\- ]/g, '_').trim() + '.nbs';
     downloadBtn.style.display = 'block';
     statsEl.innerHTML =
-      '<strong>' + s.notes + '</strong> continuous Harp notes &middot; <strong>' + s.elapsed + 's</strong><br>' +
-      'Auto Tempo: <strong>' + s.bpm + ' BPM</strong> (' + s.tps + ' TPS) &middot; ' +
-      '<strong>' + s.keys + '/25</strong> vanilla Harp keys';
+      '<strong>' + s.notes + '</strong> Harp notes &middot; <strong>' + s.elapsed + 's</strong> processing<br>' +
+      'Exact Duration: <strong>' + s.dur + 's</strong> (1:1 Real-Time Speed @ 20.00 TPS)<br>' +
+      '<strong>' + s.keys + '/25</strong> vanilla Harp keys used';
     statsEl.style.display = 'block';
   } catch (e) {
     addLog('Error: ' + e.message);
