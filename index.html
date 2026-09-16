@@ -37,7 +37,7 @@ h1 {
   text-align: center;
   cursor: pointer;
   background: #1a1a1a;
-  margin-bottom: 18px;
+  margin-bottom: 16px;
   transition: border-color 0.15s, background 0.15s;
 }
 .dropzone:hover, .dropzone.dragover {
@@ -52,6 +52,28 @@ h1 {
 .dropzone span {
   font-size: 0.75rem;
   color: #777777;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 16px;
+}
+label {
+  font-size: 0.75rem;
+  color: #888888;
+  margin-bottom: 4px;
+}
+select {
+  background: #1a1a1a;
+  border: 1px solid #333333;
+  color: #ffffff;
+  padding: 10px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  outline: none;
+}
+select:focus {
+  border-color: #666666;
 }
 .btn {
   width: 100%;
@@ -134,12 +156,21 @@ h1 {
 
 <div class="container">
   <h1>Song to Note Block</h1>
-  <p class="subtitle">Convert audio into full 88-note Harp piano music (.nbs)</p>
+  <p class="subtitle">Clean, clutter-free 88-note Harp piano converter (.nbs)</p>
 
   <div class="dropzone" id="dropzone">
     <p id="fileLabel">Select or drop audio/video file</p>
     <span id="fileSub">MP3, WAV, MP4, OGG, M4A, FLAC</span>
     <input type="file" id="fileInput" accept=".mp3,.wav,.mp4,.ogg,.m4a,.flac,.aac" style="display:none">
+  </div>
+
+  <div class="field">
+    <label for="filterPreset">Sensitivity / Clutter Filter</label>
+    <select id="filterPreset">
+      <option value="clean" selected>Clean & Pure (No clutter, loud clear notes only)</option>
+      <option value="minimal">Strict Solo (Lead melody only, max 1 note)</option>
+      <option value="standard">Standard (Balanced melody + bass)</option>
+    </select>
   </div>
 
   <button class="btn" id="convertBtn" disabled>Convert to .NBS</button>
@@ -153,7 +184,7 @@ h1 {
   <div class="stats" id="stats"></div>
 </div>
 
-<div class="version-tag">v5.0.0 (Full 88 Harp)</div>
+<div class="version-tag">v5.1.0 (Clean De-Noised)</div>
 
 <script type="module">
 import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/+esm';
@@ -165,7 +196,6 @@ const NBS_HARP = 0; // 100% Harp instrument
 const TPS = 20;     // Exact 20.00 TPS real-time clock (1 tick = 50ms)
 
 // Full 88 piano keys: MIDI 21 (A0) to MIDI 108 (C8) -> NBS keys 0 to 87
-// No octave folding! Every note plays in its true, natural pitch!
 function midiToNbsKey(midi) {
   return Math.max(0, Math.min(87, Math.round(midi) - 21));
 }
@@ -214,7 +244,7 @@ function buildNbsBinary(tickNotes, songName) {
   str("");
   u8(0); u8(0); i16(0);
 
-  // Notes section - ALL NOTES ARE HARP across the full 88 piano keys (0..87)
+  // Notes section - ALL NOTES ARE HARP (0..87 full 88-key piano)
   let prevTick = -1;
   for (const tick of sortedTicks) {
     i16(tick - prevTick);
@@ -253,19 +283,19 @@ function buildNbsBinary(tickNotes, songName) {
   return out;
 }
 
-// 88-Key Music Processing:
-// Allows full piano chords and rich polyphony with zero octave distortion
-function process88KeyNotes(noteEvents) {
+// De-Noised Clean Melody & Chords:
+// Keeps ONLY the dominant musical notes, eliminating background fuzz and drum clicks
+function processClean88KeyNotes(noteEvents, maxNotesPerTick) {
   const sorted = [...noteEvents].sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
 
   const rawTickMap = new Map();
 
   for (const n of sorted) {
     const tick = Math.max(0, Math.round(n.startTimeSeconds * TPS));
-    const nbsKey = midiToNbsKey(n.pitchMidi); // 0 to 87 true pitch!
+    const nbsKey = midiToNbsKey(n.pitchMidi);
 
-    // Clear dynamic velocity
-    const vel = Math.round(Math.max(60, Math.min(100, 50 + n.amplitude * 55)));
+    // Punchy, clear velocity
+    const vel = Math.round(Math.max(65, Math.min(100, 55 + n.amplitude * 50)));
 
     if (!rawTickMap.has(tick)) rawTickMap.set(tick, []);
     rawTickMap.get(tick).push({
@@ -276,8 +306,9 @@ function process88KeyNotes(noteEvents) {
     });
   }
 
-  // Allow rich chords across 88 keys (up to 5 simultaneous notes per tick)
+  // Filter out clutter: keep only 1 or 2 most prominent notes per tick
   const cleanedTicks = new Map();
+  let lastNoteTick = new Map();
 
   for (const [tick, notes] of rawTickMap) {
     notes.sort((a, b) => b.amp - a.amp);
@@ -286,11 +317,16 @@ function process88KeyNotes(noteEvents) {
     const usedKeys = new Set();
 
     for (const n of notes) {
-      if (chosen.length >= 5) break; // Rich chords across bass, mid, lead
+      if (chosen.length >= maxNotesPerTick) break;
       if (usedKeys.has(n.key)) continue;
+
+      // Prevent micro-fluttering of exact same key on immediate adjacent tick
+      const lastT = lastNoteTick.get(n.key) ?? -999;
+      if (tick - lastT < 2 && n.amp < 0.65) continue;
 
       chosen.push(n);
       usedKeys.add(n.key);
+      lastNoteTick.set(n.key, tick);
     }
 
     if (chosen.length > 0) {
@@ -301,14 +337,15 @@ function process88KeyNotes(noteEvents) {
   return cleanedTicks;
 }
 
-const dropzone    = document.getElementById('dropzone');
-const fileInput   = document.getElementById('fileInput');
-const convertBtn  = document.getElementById('convertBtn');
-const downloadBtn = document.getElementById('downloadBtn');
-const progressBar = document.getElementById('progressBar');
-const progressFill= document.getElementById('progressFill');
-const logEl       = document.getElementById('log');
-const statsEl     = document.getElementById('stats');
+const dropzone     = document.getElementById('dropzone');
+const fileInput    = document.getElementById('fileInput');
+const filterPreset = document.getElementById('filterPreset');
+const convertBtn   = document.getElementById('convertBtn');
+const downloadBtn  = document.getElementById('downloadBtn');
+const progressBar  = document.getElementById('progressBar');
+const progressFill = document.getElementById('progressFill');
+const logEl        = document.getElementById('log');
+const statsEl      = document.getElementById('stats');
 
 let curFile = null, dlBlob = null, dlName = 'song.nbs';
 
@@ -338,7 +375,7 @@ dropzone.addEventListener('dragover',  e   => { e.preventDefault(); dropzone.cla
 dropzone.addEventListener('dragleave', ()  => dropzone.classList.remove('dragover'));
 dropzone.addEventListener('drop',      e   => { e.preventDefault(); dropzone.classList.remove('dragover'); setFile(e.dataTransfer.files[0]); });
 
-async function runAutoConversion(file, setProg) {
+async function runAutoConversion(file, preset, setProg) {
   const startTime = performance.now();
   addLog('Decoding audio: ' + file.name + '...');
   setProg(5);
@@ -392,26 +429,44 @@ async function runAutoConversion(file, setProg) {
     }
   );
 
-  addLog('Extracting full 88-key piano harmonies...');
+  addLog('Filtering noise & extracting clean notes...');
   setProg(88);
+
+  // Strict high thresholds to eliminate background mess & drum noise
+  let onsetThresh = 0.62;
+  let frameThresh = 0.38;
+  let minNoteLen = 5; // ~58ms (filters out percussive clicks and hi-hats)
+  let maxNotesPerTick = 2; // Keep at most 2 notes (Lead melody + bass root)
+
+  if (preset === 'minimal') {
+    onsetThresh = 0.68;
+    frameThresh = 0.42;
+    minNoteLen = 6;
+    maxNotesPerTick = 1; // Solo lead only
+  } else if (preset === 'standard') {
+    onsetThresh = 0.52;
+    frameThresh = 0.32;
+    minNoteLen = 4;
+    maxNotesPerTick = 3;
+  }
 
   const rawNoteEvents = outputToNotesPoly(
     frames,
     onsets,
-    0.35,  // Clean onset threshold
-    0.20,  // Frame threshold
-    3,     // Min note length
+    onsetThresh,
+    frameThresh,
+    minNoteLen,
     true,
     null,
     null,
-    true
+    true // Melodia algorithm suppresses accompaniment to isolate the lead line
   );
 
   const noteEvents = noteFramesToTime(rawNoteEvents);
-  addLog('Transcribed ' + noteEvents.length + ' notes across all 88 keys.');
+  addLog('Extracted ' + noteEvents.length + ' clean, intentional notes (mess filtered).');
   setProg(94);
 
-  const tickNotes = process88KeyNotes(noteEvents);
+  const tickNotes = processClean88KeyNotes(noteEvents, maxNotesPerTick);
 
   let totalHarpNotes = 0;
   const uniqueKeys = new Set();
@@ -425,7 +480,7 @@ async function runAutoConversion(file, setProg) {
   setProg(100);
 
   const elapsedTime = ((performance.now() - startTime) / 1000).toFixed(1);
-  addLog('Done in ' + elapsedTime + 's! 88-key piano ready @ 20.00 TPS.');
+  addLog('Done in ' + elapsedTime + 's! Clean 88-key piano ready @ 20.00 TPS.');
 
   return {
     bytes,
@@ -448,16 +503,18 @@ convertBtn.addEventListener('click', async () => {
   progressFill.style.width = '0%';
   logEl.innerHTML = '';
 
+  const preset = filterPreset.value;
+
   try {
-    const result = await runAutoConversion(curFile, p => { progressFill.style.width = p + '%'; });
+    const result = await runAutoConversion(curFile, preset, p => { progressFill.style.width = p + '%'; });
     const s = result.stats;
     dlBlob = new Blob([result.bytes], { type: 'application/octet-stream' });
     dlName = s.songName.replace(/[^\w\- ]/g, '_').trim() + '.nbs';
     downloadBtn.style.display = 'block';
     statsEl.innerHTML =
-      '<strong>' + s.notes + '</strong> Harp notes &middot; <strong>' + s.elapsed + 's</strong> processing<br>' +
+      '<strong>' + s.notes + '</strong> clean Harp notes &middot; <strong>' + s.elapsed + 's</strong> processing<br>' +
       'Duration: <strong>' + s.dur + 's</strong> (1:1 Real-Time Speed @ 20.00 TPS)<br>' +
-      'Pitch Range: <strong>' + s.keys + '/88</strong> full piano keys (A0 to C8)';
+      'Pitch Range: <strong>' + s.keys + '/88</strong> full piano keys (clutter removed)';
     statsEl.style.display = 'block';
   } catch (e) {
     addLog('Error: ' + e.message);
